@@ -1,0 +1,27 @@
+# build output
+/build/
+/obj/
+*.exe
+*.obj
+*.o
+*.a
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# local runtime state
+*.log
+lankvm.ini
+run-test/
+
+# editors
+.vs/
+.vscode/
+*.user
+*.sln
+*.vcxproj*
+
+# misc
+Thumbs.db
+desktop.ini

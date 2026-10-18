@@ -1,0 +1,392 @@
+#include <winsock2.h>
+
+#include <cstdio>
+#include <cstring>
+#include <memory>
+#include <string>
+
+#include <windows.h>
+#include <shellapi.h>
+
+#include "agent/agent.h"
+#include "app/settings.h"
+#include "app/tray.h"
+#include "common/clipboard.h"
+#include "common/config.h"
+#include "common/crypto.h"
+#include "common/log.h"
+#include "common/net.h"
+#include "common/protocol.h"
+#include "master/master.h"
+
+namespace {
+
+constexpr UINT kBalloonMessage = WM_APP + 21;
+constexpr UINT_PTR kTimerId = 1;
+constexpr wchar_t kMainClass[] = L"LanKVM.Main";
+
+struct App {
+    lk::Config cfg;
+    std::wstring config_path;
+    std::wstring log_path;
+    HWND hwnd = nullptr;
+    lk::Tray tray;
+    std::unique_ptr<lk::Master> master;
+    std::unique_ptr<lk::Agent> agent;
+};
+
+App* g_app = nullptr;
+
+void post_balloon(const std::string& title, const std::string& text) {
+    if (!g_app || !g_app->hwnd) {
+        return;
+    }
+    auto* wide_title = new std::wstring();
+    auto* wide_text = new std::wstring();
+    lk::utf8_to_wide(title, wide_title);
+    lk::utf8_to_wide(text, wide_text);
+    PostMessageW(g_app->hwnd, kBalloonMessage, reinterpret_cast<WPARAM>(wide_title),
+                 reinterpret_cast<LPARAM>(wide_text));
+}
+
+void stop_role() {
+    App* app = g_app;
+    if (!app) {
+        return;
+    }
+    if (app->master) {
+        app->master->stop();
+        app->master.reset();
+    }
+    if (app->agent) {
+        app->agent->stop();
+        app->agent.reset();
+    }
+}
+
+bool start_role(std::string* err) {
+    App* app = g_app;
+    if (!app) {
+        return false;
+    }
+    if (app->cfg.role == "agent") {
+        app->agent = std::make_unique<lk::Agent>(app->cfg);
+        app->agent->set_notify([](const std::string& title, const std::string& text) {
+            post_balloon(title, text);
+        });
+        return app->agent->start(err);
+    }
+    app->master = std::make_unique<lk::Master>(app->cfg);
+    app->master->set_notify([](const std::string& title, const std::string& text) {
+        post_balloon(title, text);
+    });
+    return app->master->start(err);
+}
+
+void restart_role() {
+    stop_role();
+    std::string err;
+    if (!start_role(&err)) {
+        std::wstring wide;
+        lk::utf8_to_wide(err, &wide);
+        MessageBoxW(g_app->hwnd, wide.c_str(), L"LanKVM 启动失败", MB_OK | MB_ICONERROR);
+    }
+}
+
+void update_tooltip() {
+    App* app = g_app;
+    if (!app) {
+        return;
+    }
+    std::wstring text = L"LanKVM ";
+    text += (app->cfg.role == "agent") ? L"[受控端] " : L"[主控端] ";
+    if (app->master) {
+        text += app->master->connected() ? L"已连接" : L"等待连接";
+        if (app->master->remote_active()) {
+            text += L" / 远程控制中";
+        }
+        int64_t latency = app->master->latency_us();
+        if (latency >= 0) {
+            wchar_t buffer[64]{};
+            std::swprintf(buffer, std::size(buffer), L" / %.1fms", latency / 1000.0);
+            text += buffer;
+        }
+    } else if (app->agent) {
+        text += app->agent->peer_connected() ? L"已连接" : L"监听中";
+    } else {
+        text += L"未运行";
+    }
+    app->tray.update_tooltip(text);
+}
+
+void handle_command(int command) {
+    App* app = g_app;
+    if (!app) {
+        return;
+    }
+    switch (command) {
+        case lk::Tray::kCmdConnect:
+            if (app->master) {
+                app->master->connect_now();
+            } else {
+                restart_role();
+            }
+            break;
+        case lk::Tray::kCmdDisconnect:
+            if (app->master) {
+                app->master->disconnect();
+            } else if (app->agent) {
+                app->agent->stop();
+            }
+            break;
+        case lk::Tray::kCmdSettings: {
+            lk::Config updated = app->cfg;
+            if (lk::SettingsDialog::show(app->hwnd, &updated)) {
+                app->cfg = updated;
+                std::string save_err;
+                lk::config_save(app->config_path, app->cfg, &save_err);
+                restart_role();
+                update_tooltip();
+            }
+            break;
+        }
+        case lk::Tray::kCmdOpenLog:
+            ShellExecuteW(nullptr, L"open", app->log_path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        case lk::Tray::kCmdAbout: {
+            std::wstring message = L"LanKVM 0.1.0\n\n";
+            message += L"局域网键鼠共享 + 剪贴板同步 + 文件投递\n";
+            message += L"角色：";
+            message += (app->cfg.role == "agent") ? L"受控端" : L"主控端";
+            message += L"\n端口：";
+            message += std::to_wstring(app->cfg.port);
+            MessageBoxW(app->hwnd, message.c_str(), L"关于 LanKVM", MB_OK | MB_ICONINFORMATION);
+            break;
+        }
+        case lk::Tray::kCmdExit:
+            DestroyWindow(app->hwnd);
+            break;
+        default:
+            break;
+    }
+}
+
+LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    App* app = g_app;
+    switch (msg) {
+        case lk::Tray::kCallbackMessage:
+            if (app && (lparam == WM_RBUTTONUP || lparam == WM_LBUTTONUP || lparam == WM_CONTEXTMENU)) {
+                int command = app->tray.show_menu();
+                if (command != 0) {
+                    handle_command(command);
+                }
+            }
+            return 0;
+        case kBalloonMessage: {
+            auto* title = reinterpret_cast<std::wstring*>(wparam);
+            auto* text = reinterpret_cast<std::wstring*>(lparam);
+            if (app && title && text) {
+                app->tray.balloon(*title, *text);
+            }
+            delete title;
+            delete text;
+            return 0;
+        }
+        case WM_TIMER:
+            if (wparam == kTimerId) {
+                update_tooltip();
+            }
+            return 0;
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+void print_usage() {
+    std::printf(
+        "LanKVM 0.1.0\n"
+        "usage: lankvm [master|agent] [--config <path>] [--selftest]\n"
+        "  master  capture local input and drive the peer (default)\n"
+        "  agent   listen and inject input received from the master\n");
+}
+
+int run_selftest() {
+    int failures = 0;
+    auto check = [&failures](bool ok, const char* name) {
+        std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", name);
+        if (!ok) {
+            ++failures;
+        }
+    };
+
+    check(lk::crypto_init(), "crypto_init");
+
+    std::vector<uint8_t> digest = lk::sha256("abc", 3);
+    check(digest.size() == 32 && digest[0] == 0xba && digest[1] == 0x78, "sha256 known answer");
+
+    std::vector<uint8_t> key(32, 0x0b);
+    std::vector<uint8_t> mac = lk::hmac_sha256(key, "Hi There", 8);
+    check(mac.size() == 32, "hmac produces 32 bytes");
+
+    uint8_t aes_key[32]{};
+    uint8_t nonce[12]{};
+    for (int i = 0; i < 32; ++i) {
+        aes_key[i] = static_cast<uint8_t>(i);
+    }
+    std::vector<uint8_t> plain{'h', 'e', 'l', 'l', 'o'};
+    std::vector<uint8_t> cipher;
+    uint8_t tag[16]{};
+    bool encrypted = lk::aes256_gcm_encrypt(aes_key, nonce, plain.data(), plain.size(), &cipher, tag);
+    std::vector<uint8_t> roundtrip;
+    bool decrypted = encrypted && lk::aes256_gcm_decrypt(aes_key, nonce, cipher.data(), cipher.size(),
+                                                         tag, &roundtrip);
+    check(decrypted && roundtrip == plain, "aes-256-gcm round trip");
+
+    tag[0] ^= 0xFF;
+    std::vector<uint8_t> tampered;
+    check(!lk::aes256_gcm_decrypt(aes_key, nonce, cipher.data(), cipher.size(), tag, &tampered),
+          "aes-256-gcm rejects tampered tag");
+
+    lk::Frame frame;
+    frame.type = lk::MsgType::InputBatch;
+    frame.seq = 42;
+    frame.payload = {1, 2, 3, 4};
+    std::vector<uint8_t> bytes;
+    lk::encode_frame(frame, &bytes);
+    check(bytes.size() == lk::kHeaderSize + 4, "frame encoding size");
+
+    std::printf("selftest: %d failure(s)\n", failures);
+    return failures;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    SetConsoleOutputCP(CP_UTF8);
+
+    std::string role;
+    std::wstring config_path;
+    bool selftest = false;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--help" || arg == "-h") {
+            print_usage();
+            return 0;
+        }
+        if (arg == "--selftest") {
+            selftest = true;
+            continue;
+        }
+        if (arg == "--config" && i + 1 < argc) {
+            std::string path = argv[++i];
+            config_path.assign(path.begin(), path.end());
+            continue;
+        }
+        if (arg == "master" || arg == "agent") {
+            role = arg;
+            continue;
+        }
+        std::printf("unknown argument: %s\n", arg.c_str());
+        print_usage();
+        return 2;
+    }
+
+    if (selftest) {
+        return run_selftest();
+    }
+
+    if (!lk::net_init()) {
+        std::printf("WSAStartup failed\n");
+        return 1;
+    }
+    if (!lk::crypto_init()) {
+        std::printf("crypto init failed\n");
+        lk::net_shutdown();
+        return 1;
+    }
+
+    App app;
+    g_app = &app;
+    app.config_path = config_path.empty() ? lk::config_default_path() : config_path;
+
+    std::string err;
+    bool loaded = lk::config_load(app.config_path, &app.cfg, &err);
+    bool first_run = !loaded;
+    if (!loaded) {
+        LK_INFO("config not found (%s), creating defaults", err.c_str());
+        lk::config_ensure_psk(&app.cfg);
+        lk::config_save(app.config_path, app.cfg, nullptr);
+    } else if (!lk::config_ensure_psk(&app.cfg)) {
+        LK_ERROR("cannot prepare pre-shared key");
+    }
+    if (!role.empty()) {
+        app.cfg.role = role;
+    }
+    if (app.cfg.role != "agent") {
+        app.cfg.role = "master";
+    }
+
+    lk::LogLevel level = lk::LogLevel::Info;
+    lk::log_parse_level(app.cfg.log_level, &level);
+    app.log_path = app.config_path;
+    size_t dot = app.log_path.find_last_of(L'.');
+    if (dot != std::wstring::npos) {
+        app.log_path = app.log_path.substr(0, dot);
+    }
+    app.log_path += L".log";
+    lk::log_open(app.log_path, level);
+    LK_INFO("LanKVM starting as %s", app.cfg.role.c_str());
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = wnd_proc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = kMainClass;
+    RegisterClassExW(&wc);
+    app.hwnd = CreateWindowExW(0, kMainClass, L"LanKVM", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                               wc.hInstance, nullptr);
+    if (!app.hwnd) {
+        std::printf("cannot create message window\n");
+        return 1;
+    }
+
+    app.tray.create(app.hwnd, L"LanKVM");
+    update_tooltip();
+
+    if (!start_role(&err)) {
+        std::wstring wide;
+        lk::utf8_to_wide(err, &wide);
+        MessageBoxW(nullptr, wide.c_str(), L"LanKVM 启动失败", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
+    SetTimer(app.hwnd, kTimerId, 1000, nullptr);
+
+    if (first_run) {
+        std::printf("first run: config written to %ls\n", app.config_path.c_str());
+        std::printf("pre-shared key: %s\n", app.cfg.psk_hex.c_str());
+    }
+    std::printf("LanKVM running as %s (port %u). Right-click the tray icon for settings.\n",
+                app.cfg.role.c_str(), app.cfg.port);
+
+    MSG msg{};
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    KillTimer(app.hwnd, kTimerId);
+    stop_role();
+    app.tray.destroy();
+    LK_INFO("LanKVM exiting");
+    lk::log_close();
+    lk::net_shutdown();
+    g_app = nullptr;
+    return 0;
+}
