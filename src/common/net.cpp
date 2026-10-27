@@ -1,7 +1,12 @@
 #include "common/net.h"
 
+#include <iphlpapi.h>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <cwctype>
+#include <vector>
 
 #include "common/log.h"
 
@@ -17,6 +22,37 @@ std::string wsa_error_text(int code) {
     char buf[256]{};
     std::snprintf(buf, sizeof(buf), "winsock error %d", code);
     return buf;
+}
+
+bool is_virtual_adapter(const std::wstring& text) {
+    std::wstring lower = text;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+    static const wchar_t* kMarkers[] = {L"vmware",   L"virtualbox", L"hyper-v",  L"vethernet",
+                                        L"wsl",      L"loopback",   L"bluetooth", L"tap-",
+                                        L"tunnel",   L"vpn",        L"tailscale", L"zerotier",
+                                        L"docker",   L"npcap",      L"virtual"};
+    for (const wchar_t* marker : kMarkers) {
+        if (lower.find(marker) != std::wstring::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string narrow(const std::wstring& text) {
+    if (text.empty()) {
+        return {};
+    }
+    int len = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr,
+                                  0, nullptr, nullptr);
+    if (len <= 0) {
+        return {};
+    }
+    std::string out(static_cast<size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), len,
+                        nullptr, nullptr);
+    return out;
 }
 
 }  // namespace
@@ -242,22 +278,177 @@ std::string resolve_ipv4(const std::string& host, std::string* err) {
 }
 
 std::string local_ipv4() {
-    char name[256]{};
-    if (gethostname(name, sizeof(name)) != 0) {
+    ULONG buffer_size = 16 * 1024;
+    std::vector<uint8_t> buffer(buffer_size);
+    ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_INCLUDE_GATEWAYS;
+    auto* addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    ULONG result = GetAdaptersAddresses(AF_INET, flags, nullptr, addresses, &buffer_size);
+    if (result == ERROR_BUFFER_OVERFLOW) {
+        buffer.resize(buffer_size);
+        addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+        result = GetAdaptersAddresses(AF_INET, flags, nullptr, addresses, &buffer_size);
+    }
+    if (result != ERROR_SUCCESS) {
         return "127.0.0.1";
     }
-    addrinfo hints{};
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    addrinfo* result = nullptr;
-    if (getaddrinfo(name, nullptr, &hints, &result) != 0 || result == nullptr) {
-        return "127.0.0.1";
+
+    auto looks_virtual = [](const std::wstring& text) { return is_virtual_adapter(text); };
+
+    std::string fallback;
+    for (auto* adapter = addresses; adapter != nullptr; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp) {
+            continue;
+        }
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK || adapter->IfType == IF_TYPE_TUNNEL) {
+            continue;
+        }
+        if (adapter->Description && looks_virtual(adapter->Description)) {
+            continue;
+        }
+        if (adapter->FriendlyName && looks_virtual(adapter->FriendlyName)) {
+            continue;
+        }
+        const bool has_gateway = adapter->FirstGatewayAddress != nullptr;
+
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr;
+             unicast = unicast->Next) {
+            if (unicast->Address.lpSockaddr == nullptr ||
+                unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+            auto* sin = reinterpret_cast<sockaddr_in*>(unicast->Address.lpSockaddr);
+            char text[INET_ADDRSTRLEN]{};
+            if (inet_ntop(AF_INET, &sin->sin_addr, text, sizeof(text)) == nullptr) {
+                continue;
+            }
+            std::string ip(text);
+            if (ip.rfind("169.254.", 0) == 0 || ip == "0.0.0.0") {
+                continue;
+            }
+            if (has_gateway) {
+                return ip;
+            }
+            if (fallback.empty()) {
+                fallback = ip;
+            }
+        }
     }
-    char text[INET_ADDRSTRLEN]{};
-    auto* addr = reinterpret_cast<sockaddr_in*>(result->ai_addr);
-    inet_ntop(AF_INET, &addr->sin_addr, text, sizeof(text));
-    freeaddrinfo(result);
-    return text;
+    return fallback.empty() ? "127.0.0.1" : fallback;
+}
+
+std::string local_ipv4_for(const std::string& peer) {
+    std::string target = peer;
+    in_addr parsed{};
+    if (inet_pton(AF_INET, peer.c_str(), &parsed) != 1) {
+        std::string err;
+        target = resolve_ipv4(peer, &err);
+        if (target.empty() || inet_pton(AF_INET, target.c_str(), &parsed) != 1) {
+            return local_ipv4();
+        }
+    }
+
+    SOCKET probe = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (probe == INVALID_SOCKET) {
+        return local_ipv4();
+    }
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(9);
+    remote.sin_addr = parsed;
+
+    std::string result = local_ipv4();
+    if (connect(probe, reinterpret_cast<sockaddr*>(&remote), sizeof(remote)) == 0) {
+        sockaddr_in local{};
+        int length = sizeof(local);
+        if (getsockname(probe, reinterpret_cast<sockaddr*>(&local), &length) == 0) {
+            char text[INET_ADDRSTRLEN]{};
+            if (inet_ntop(AF_INET, &local.sin_addr, text, sizeof(text)) != nullptr) {
+                result = text;
+            }
+        }
+    }
+    closesocket(probe);
+    return result;
+}
+
+std::string describe_adapters() {
+    ULONG buffer_size = 16 * 1024;
+    std::vector<uint8_t> buffer(buffer_size);
+    ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_INCLUDE_GATEWAYS;
+    auto* addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    ULONG result = GetAdaptersAddresses(AF_INET, flags, nullptr, addresses, &buffer_size);
+    if (result == ERROR_BUFFER_OVERFLOW) {
+        buffer.resize(buffer_size);
+        addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+        result = GetAdaptersAddresses(AF_INET, flags, nullptr, addresses, &buffer_size);
+    }
+    if (result != ERROR_SUCCESS) {
+        return "cannot enumerate network adapters\n";
+    }
+
+    std::string out;
+    int index = 0;
+    for (auto* adapter = addresses; adapter != nullptr; adapter = adapter->Next) {
+        ++index;
+        const std::string name = narrow(adapter->FriendlyName ? adapter->FriendlyName : L"");
+        const std::string desc = narrow(adapter->Description ? adapter->Description : L"");
+        const bool up = adapter->OperStatus == IfOperStatusUp;
+        const bool loopback = adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
+        const bool tunnel = adapter->IfType == IF_TYPE_TUNNEL;
+        const bool virtual_adapter = is_virtual_adapter(adapter->FriendlyName
+                                                            ? adapter->FriendlyName
+                                                            : L"") ||
+                                     is_virtual_adapter(adapter->Description ? adapter->Description
+                                                                             : L"");
+        const bool has_gateway = adapter->FirstGatewayAddress != nullptr;
+
+        char header[512]{};
+        std::snprintf(header, sizeof(header), "[%d] %s\n    desc  : %s\n    state : %s    gateway: %s\n",
+                      index, name.c_str(), desc.c_str(), up ? "up" : "down",
+                      has_gateway ? "yes" : "no");
+        out += header;
+
+        int ipv4_count = 0;
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr;
+             unicast = unicast->Next) {
+            if (unicast->Address.lpSockaddr == nullptr ||
+                unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+            auto* sin = reinterpret_cast<sockaddr_in*>(unicast->Address.lpSockaddr);
+            char text[INET_ADDRSTRLEN]{};
+            if (inet_ntop(AF_INET, &sin->sin_addr, text, sizeof(text)) != nullptr) {
+                ++ipv4_count;
+                out += "    ipv4  : ";
+                out += text;
+                out += "\n";
+            }
+        }
+        if (ipv4_count == 0) {
+            out += "    ipv4  : (none)\n";
+        }
+
+        const char* verdict = "usable";
+        if (!up) {
+            verdict = "skip (adapter is down)";
+        } else if (loopback) {
+            verdict = "skip (loopback)";
+        } else if (tunnel) {
+            verdict = "skip (tunnel)";
+        } else if (virtual_adapter) {
+            verdict = "skip (virtual adapter: VMware/WSL/Hyper-V/VPN)";
+        } else if (ipv4_count == 0) {
+            verdict = "skip (no IPv4 address)";
+        }
+        out += "    -> ";
+        out += verdict;
+        out += "\n\n";
+    }
+
+    out += "best local address: ";
+    out += local_ipv4();
+    out += "\n";
+    return out;
 }
 
 }  // namespace lk

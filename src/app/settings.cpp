@@ -22,10 +22,13 @@ enum ControlId {
     kIdSave = 2009,
     kIdCancel = 2010,
     kIdLocalIp = 2011,
+    kIdRoleMaster = 2012,
+    kIdRoleAgent = 2013,
+    kIdLocalHint = 2014,
 };
 
 constexpr int kWidth = 460;
-constexpr int kHeight = 430;
+constexpr int kHeight = 500;
 
 class Dialog {
 public:
@@ -40,6 +43,7 @@ public:
     void create_controls();
     void load_values();
     bool save_values();
+    void apply_role_state();
 };
 
 void set_text(HWND control, const std::wstring& text) {
@@ -81,36 +85,42 @@ void Dialog::create_controls() {
                         DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
     self->parent_ = GetParent(hwnd_);
 
-    make(L"STATIC", L"对端 IP", 0, 20, 20, 80, 22, -1);
-    make(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 110, 18, 300, 24, kIdPeer);
+    make(L"STATIC", L"角色", 0, 20, 20, 60, 22, -1);
+    make(L"BUTTON", L"主控端（这台接键鼠）", BS_AUTORADIOBUTTON | WS_GROUP, 90, 18, 150, 24,
+         kIdRoleMaster);
+    make(L"BUTTON", L"受控端（这台被控制）", BS_AUTORADIOBUTTON, 250, 18, 150, 24, kIdRoleAgent);
 
-    make(L"STATIC", L"端口", 0, 20, 56, 80, 22, -1);
-    make(L"EDIT", L"", WS_BORDER | ES_NUMBER, 110, 54, 100, 24, kIdPort);
+    make(L"STATIC", L"对端 IP", 0, 20, 58, 80, 22, -1);
+    make(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 110, 56, 300, 24, kIdPeer);
 
-    make(L"STATIC", L"预共享密钥 (64 位十六进制)", 0, 20, 92, 220, 22, -1);
-    make(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 110, 114, 300, 24, kIdPsk);
+    make(L"STATIC", L"端口", 0, 20, 94, 80, 22, -1);
+    make(L"EDIT", L"", WS_BORDER | ES_NUMBER, 110, 92, 100, 24, kIdPort);
 
-    make(L"STATIC", L"对端在我的哪一侧", 0, 20, 152, 160, 22, -1);
-    HWND combo = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 190, 150, 140, 120,
+    make(L"STATIC", L"预共享密钥 (64 位十六进制)", 0, 20, 130, 260, 22, -1);
+    make(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 110, 152, 300, 24, kIdPsk);
+
+    make(L"STATIC", L"对端在我的哪一侧", 0, 20, 190, 160, 22, -1);
+    HWND combo = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 190, 188, 140, 120,
                       kIdEdge);
     SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"右侧"));
     SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"左侧"));
     SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"上方"));
     SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"下方"));
 
-    make(L"BUTTON", L"同步剪贴板", BS_AUTOCHECKBOX, 20, 190, 150, 24, kIdClipboard);
-    make(L"BUTTON", L"显示文件投递框", BS_AUTOCHECKBOX, 20, 218, 170, 24, kIdDropzone);
-    make(L"BUTTON", L"加密剪贴板 (AES-256-GCM)", BS_AUTOCHECKBOX, 20, 246, 250, 24, kIdEncrypt);
-    make(L"BUTTON", L"启动时自动连接", BS_AUTOCHECKBOX, 20, 274, 180, 24, kIdAutoConnect);
+    make(L"BUTTON", L"同步剪贴板", BS_AUTOCHECKBOX, 20, 228, 150, 24, kIdClipboard);
+    make(L"BUTTON", L"显示文件投递框", BS_AUTOCHECKBOX, 20, 256, 170, 24, kIdDropzone);
+    make(L"BUTTON", L"加密剪贴板 (AES-256-GCM)", BS_AUTOCHECKBOX, 20, 284, 250, 24, kIdEncrypt);
+    make(L"BUTTON", L"启动时自动连接", BS_AUTOCHECKBOX, 20, 312, 180, 24, kIdAutoConnect);
 
-    make(L"STATIC", L"本机地址", 0, 20, 312, 80, 22, -1);
-    make(L"STATIC", L"", 0, 110, 312, 300, 22, kIdLocalIp);
+    make(L"STATIC", L"本机地址", 0, 20, 350, 80, 22, -1);
+    make(L"STATIC", L"", 0, 110, 350, 320, 22, kIdLocalIp);
+    make(L"STATIC", L"把这个地址填到主控端的「对端 IP」", 0, 110, 374, 320, 20, kIdLocalHint);
 
-    make(L"BUTTON", L"保存", BS_DEFPUSHBUTTON, 230, 350, 100, 32, kIdSave);
-    make(L"BUTTON", L"取消", BS_PUSHBUTTON, 340, 350, 100, 32, kIdCancel);
+    make(L"BUTTON", L"保存", BS_DEFPUSHBUTTON, 230, 410, 100, 32, kIdSave);
+    make(L"BUTTON", L"取消", BS_PUSHBUTTON, 340, 410, 100, 32, kIdCancel);
 
     set_text(GetDlgItem(hwnd_, kIdLocalIp), L"获取中...");
-    std::string ip = local_ipv4();
+    std::string ip = cfg_->peer_ip.empty() ? local_ipv4() : local_ipv4_for(cfg_->peer_ip);
     std::wstring wide;
     utf8_to_wide(ip, &wide);
     set_text(GetDlgItem(hwnd_, kIdLocalIp), wide + L":" + std::to_wstring(cfg_->port));
@@ -140,15 +150,27 @@ void Dialog::load_values() {
     CheckDlgButton(hwnd_, kIdDropzone, cfg_->dropzone ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwnd_, kIdEncrypt, cfg_->encrypt_clipboard ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(hwnd_, kIdAutoConnect, cfg_->auto_connect ? BST_CHECKED : BST_UNCHECKED);
+
+    CheckRadioButton(hwnd_, kIdRoleMaster, kIdRoleAgent,
+                     cfg_->role == "agent" ? kIdRoleAgent : kIdRoleMaster);
+    apply_role_state();
+}
+
+void Dialog::apply_role_state() {
+    const bool is_agent = IsDlgButtonChecked(hwnd_, kIdRoleAgent) == BST_CHECKED;
+    EnableWindow(GetDlgItem(hwnd_, kIdPeer), !is_agent);
+    EnableWindow(GetDlgItem(hwnd_, kIdEdge), !is_agent);
+    EnableWindow(GetDlgItem(hwnd_, kIdAutoConnect), !is_agent);
 }
 
 bool Dialog::save_values() {
+    const bool is_agent = IsDlgButtonChecked(hwnd_, kIdRoleAgent) == BST_CHECKED;
     std::wstring peer = get_text(GetDlgItem(hwnd_, kIdPeer));
     std::wstring port_text = get_text(GetDlgItem(hwnd_, kIdPort));
     std::wstring psk = get_text(GetDlgItem(hwnd_, kIdPsk));
 
-    if (peer.empty()) {
-        MessageBoxW(hwnd_, L"对端 IP 不能为空。", L"设置", MB_OK | MB_ICONWARNING);
+    if (!is_agent && peer.empty()) {
+        MessageBoxW(hwnd_, L"主控端必须填写对端 IP。", L"设置", MB_OK | MB_ICONWARNING);
         return false;
     }
     int port = _wtoi(port_text.c_str());
@@ -165,7 +187,10 @@ bool Dialog::save_values() {
         return false;
     }
 
-    to_utf8(peer, &cfg_->peer_ip);
+    if (!peer.empty()) {
+        to_utf8(peer, &cfg_->peer_ip);
+    }
+    cfg_->role = is_agent ? "agent" : "master";
     cfg_->port = static_cast<uint16_t>(port);
     cfg_->psk_hex = psk_utf8;
 
@@ -194,6 +219,10 @@ LRESULT CALLBACK Dialog::wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpa
             return 0;
         case WM_COMMAND: {
             int id = LOWORD(wparam);
+            if ((id == kIdRoleMaster || id == kIdRoleAgent) && self) {
+                self->apply_role_state();
+                return 0;
+            }
             if (id == kIdSave && self) {
                 if (self->save_values()) {
                     self->saved_ = true;

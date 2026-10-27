@@ -36,7 +36,7 @@ set(LANKVM_CORE_SOURCES
 
 add_library(lankvm_core STATIC ${LANKVM_CORE_SOURCES})
 target_include_directories(lankvm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(lankvm_core PUBLIC ws2_32 bcrypt shell32 ole32 oleaut32 user32 gdi32 comctl32 shlwapi)
+target_link_libraries(lankvm_core PUBLIC ws2_32 bcrypt shell32 ole32 oleaut32 user32 gdi32 comctl32 shlwapi iphlpapi)
 
 add_executable(lankvm src/app/main.cpp)
 target_link_libraries(lankvm PRIVATE lankvm_core)

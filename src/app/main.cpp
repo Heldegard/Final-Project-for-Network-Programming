@@ -29,7 +29,9 @@ struct App {
     lk::Config cfg;
     std::wstring config_path;
     std::wstring log_path;
+    std::string local_ip;
     HWND hwnd = nullptr;
+    HANDLE instance_mutex = nullptr;
     lk::Tray tray;
     std::unique_ptr<lk::Master> master;
     std::unique_ptr<lk::Agent> agent;
@@ -100,6 +102,11 @@ void update_tooltip() {
     }
     std::wstring text = L"LanKVM ";
     text += (app->cfg.role == "agent") ? L"[受控端] " : L"[主控端] ";
+    if (!app->local_ip.empty()) {
+        std::wstring wide_ip;
+        lk::utf8_to_wide(app->local_ip, &wide_ip);
+        text += wide_ip + L":" + std::to_wstring(app->cfg.port) + L"  ";
+    }
     if (app->master) {
         text += app->master->connected() ? L"已连接" : L"等待连接";
         if (app->master->remote_active()) {
@@ -154,12 +161,18 @@ void handle_command(int command) {
             ShellExecuteW(nullptr, L"open", app->log_path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             break;
         case lk::Tray::kCmdAbout: {
-            std::wstring message = L"LanKVM 0.1.0\n\n";
-            message += L"局域网键鼠共享 + 剪贴板同步 + 文件投递\n";
+            std::wstring message = L"LanKVM 0.1.1\n\n";
+            message += L"局域网键鼠共享 + 剪贴板同步 + 文件投递\n\n";
             message += L"角色：";
             message += (app->cfg.role == "agent") ? L"受控端" : L"主控端";
             message += L"\n端口：";
             message += std::to_wstring(app->cfg.port);
+            message += L"\n本机地址：";
+            std::wstring wide_ip;
+            lk::utf8_to_wide(app->local_ip, &wide_ip);
+            message += wide_ip.empty() ? L"未知" : wide_ip;
+            message += L"\n配置：";
+            message += app->config_path;
             MessageBoxW(app->hwnd, message.c_str(), L"关于 LanKVM", MB_OK | MB_ICONINFORMATION);
             break;
         }
@@ -208,10 +221,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 void print_usage() {
     std::printf(
-        "LanKVM 0.1.0\n"
-        "usage: lankvm [master|agent] [--config <path>] [--selftest]\n"
-        "  master  capture local input and drive the peer (default)\n"
-        "  agent   listen and inject input received from the master\n");
+        "LanKVM 0.1.1\n"
+        "usage: lankvm [master|agent] [--config <path>] [--netinfo] [--selftest]\n"
+        "  master    capture local input and drive the peer (default)\n"
+        "  agent     listen and inject input received from the master\n"
+        "  --netinfo list every network adapter and which address to use\n");
 }
 
 int run_selftest() {
@@ -272,6 +286,7 @@ int main(int argc, char** argv) {
     std::string role;
     std::wstring config_path;
     bool selftest = false;
+    bool netinfo = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -281,6 +296,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--selftest") {
             selftest = true;
+            continue;
+        }
+        if (arg == "--netinfo") {
+            netinfo = true;
             continue;
         }
         if (arg == "--config" && i + 1 < argc) {
@@ -299,6 +318,17 @@ int main(int argc, char** argv) {
 
     if (selftest) {
         return run_selftest();
+    }
+
+    if (netinfo) {
+        if (!lk::net_init()) {
+            std::printf("WSAStartup failed\n");
+            return 1;
+        }
+        std::string report = lk::describe_adapters();
+        std::printf("%s", report.c_str());
+        lk::net_shutdown();
+        return 0;
     }
 
     if (!lk::net_init()) {
@@ -331,6 +361,30 @@ int main(int argc, char** argv) {
     if (app.cfg.role != "agent") {
         app.cfg.role = "master";
     }
+    if (!role.empty()) {
+        // Keep the ini in sync with the effective role. Otherwise the file says
+        // "master" while the process runs as an agent, and the next plain
+        // double-click silently starts the wrong mode.
+        lk::config_save(app.config_path, app.cfg, nullptr);
+    }
+
+    // Only one instance per role+port, so a stale master icon cannot be mistaken
+    // for the agent that was just launched.
+    std::wstring mutex_name = L"Local\\LanKVM." +
+                              std::wstring(app.cfg.role.begin(), app.cfg.role.end()) + L"." +
+                              std::to_wstring(app.cfg.port);
+    app.instance_mutex = CreateMutexW(nullptr, TRUE, mutex_name.c_str());
+    if (app.instance_mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
+        std::printf("another %s instance is already running on port %u; exiting.\n",
+                    app.cfg.role.c_str(), static_cast<unsigned>(app.cfg.port));
+        MessageBoxW(nullptr,
+                    L"已经有一个相同角色的 LanKVM 在运行。\n\n"
+                    L"请查看系统托盘（图标可能在 ^ 折叠区）。\n"
+                    L"如果托盘里的角色和你预期的不一样，那是旧实例，先退出它再启动。",
+                    L"LanKVM", MB_OK | MB_ICONINFORMATION);
+        CloseHandle(app.instance_mutex);
+        return 0;
+    }
 
     lk::LogLevel level = lk::LogLevel::Info;
     lk::log_parse_level(app.cfg.log_level, &level);
@@ -341,7 +395,16 @@ int main(int argc, char** argv) {
     }
     app.log_path += L".log";
     lk::log_open(app.log_path, level);
-    LK_INFO("LanKVM starting as %s", app.cfg.role.c_str());
+    app.local_ip = lk::local_ipv4();
+    LK_INFO("LanKVM starting as %s (local %s:%u)", app.cfg.role.c_str(), app.local_ip.c_str(),
+            static_cast<unsigned>(app.cfg.port));
+
+    {
+        std::wstring console_title =
+            (app.cfg.role == "agent") ? L"LanKVM [受控端] " : L"LanKVM [主控端] ";
+        console_title += std::to_wstring(app.cfg.port);
+        SetConsoleTitleW(console_title.c_str());
+    }
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -372,8 +435,19 @@ int main(int argc, char** argv) {
         std::printf("first run: config written to %ls\n", app.config_path.c_str());
         std::printf("pre-shared key: %s\n", app.cfg.psk_hex.c_str());
     }
-    std::printf("LanKVM running as %s (port %u). Right-click the tray icon for settings.\n",
-                app.cfg.role.c_str(), app.cfg.port);
+    std::printf("\n==================================================\n");
+    std::printf(" LanKVM 0.1.1\n");
+    std::printf(" role   : %s\n", app.cfg.role.c_str());
+    std::printf(" config : %ls\n", app.config_path.c_str());
+    std::printf(" local  : %s:%u\n", app.local_ip.c_str(), static_cast<unsigned>(app.cfg.port));
+    if (app.cfg.role == "agent") {
+        std::printf(" listen : 0.0.0.0:%u\n", static_cast<unsigned>(app.cfg.port));
+        std::printf(" -> 在主控端的 \"对端 IP\" 里填 %s\n", app.local_ip.c_str());
+    } else {
+        std::printf(" peer   : %s:%u\n", app.cfg.peer_ip.c_str(),
+                    static_cast<unsigned>(app.cfg.port));
+    }
+    std::printf("==================================================\n\n");
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -384,6 +458,10 @@ int main(int argc, char** argv) {
     KillTimer(app.hwnd, kTimerId);
     stop_role();
     app.tray.destroy();
+    if (app.instance_mutex) {
+        CloseHandle(app.instance_mutex);
+        app.instance_mutex = nullptr;
+    }
     LK_INFO("LanKVM exiting");
     lk::log_close();
     lk::net_shutdown();

@@ -42,6 +42,17 @@ bool send_all(const Socket& sock, const void* data, size_t len);
 bool recv_all(const Socket& sock, void* data, size_t len);
 
 std::string resolve_ipv4(const std::string& host, std::string* err);
+
+// Best LAN address of this machine. Skips virtual adapters (VMware, VirtualBox,
+// WSL, Hyper-V, VPN, Bluetooth) and prefers the interface that owns the
+// default route, so the answer is the address a peer can actually reach.
 std::string local_ipv4();
+
+// Address this machine would use to reach `peer`. More accurate than local_ipv4
+// when the peer is known, because it asks the routing table instead of guessing.
+std::string local_ipv4_for(const std::string& peer);
+
+// Human readable dump of every adapter and why it was accepted or skipped.
+std::string describe_adapters();
 
 }  // namespace lk

@@ -21,17 +21,23 @@ scripts\build.cmd -Config Release -Test
 ```cmd
 lankvm.exe agent     # 受控端：监听 24800，接收并注入输入
 lankvm.exe master    # 主控端：采集输入，推到边缘就接管对端
+lankvm.exe --netinfo # 列出所有网卡，告诉你该用哪个 IP
 ```
 
-首次运行会在 exe 同目录生成 `lankvm.ini`（含随机预共享密钥）。两端 PSK 必须一致。
-托盘点右键可打开设置窗口。完整验收步骤见 [docs/TESTING.md](docs/TESTING.md)。
+首次运行会在 exe 同目录生成 `lankvm.ini`（含随机预共享密钥），两端必须一致。
+托盘右键打开设置窗口，可以在里面直接选角色（主控端 / 受控端），保存后自动重启角色。
+命令行指定的角色也会写回 ini，不会出现"跑的是 agent、文件里写的是 master"。
+
+同一角色 + 同一端口只允许一个实例，重复启动会提示并退出，避免托盘里出现两个分不清的图标。
+
+完整验收步骤见 [docs/TESTING.md](docs/TESTING.md)。
 
 ## 配置项
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `role` | master | `master` / `agent`，可被命令行覆盖 |
-| `peer_ip` | 127.0.0.1 | 主控端：受控端地址 |
+| `role` | master | `master` / `agent`，可被命令行或设置窗口覆盖 |
+| `peer_ip` | 127.0.0.1 | 主控端：受控端地址（用 `--netinfo` 查） |
 | `port` | 24800 | TCP 监听/连接端口 |
 | `psk` | 随机生成 | 32 字节 hex，两端一致 |
 | `edge` | right | 受控端在主控端的哪一侧：left/right/top/bottom |

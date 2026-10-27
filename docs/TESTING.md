@@ -36,33 +36,46 @@ scripts\setup-firewall.cmd -SetNetworkPrivate
    ```
 
 3. **把 A 机的这一串 PSK 抄到 B 机的 `lankvm.ini` 里**，两端必须完全一致。
-4. 按角色改配置：
+4. **确认该给对端哪个 IP**（有 VMware/WSL 时网卡很多，别靠猜）：
 
-   **受控端（被控制的那台）**
-   ```ini
-   role=agent
-   port=24800
-   psk=<同一串 PSK>
-   log_level=debug
+   ```cmd
+   D:\LanKVM\lankvm.exe --netinfo
    ```
 
-   **主控端（接键盘鼠标的那台）**
-   ```ini
-   role=master
-   peer_ip=<受控端的 IP，例如 192.168.1.7>
-   port=24800
-   psk=<同一串 PSK>
-   edge=right
-   auto_connect=1
-   clipboard=1
-   encrypt_clipboard=1
-   dropzone=1
-   log_level=debug
+   它会逐个列出网卡并说明为什么跳过，最后一行就是答案：
+
+   ```
+   [6] VMware Network Adapter VMnet8
+       ipv4  : 192.168.163.1
+       -> skip (virtual adapter: VMware/WSL/Hyper-V/VPN)
+
+   [8] WLAN
+       desc  : Realtek RTL8852BE WiFi 6 802.11ax PCIe Adapter
+       state : up    gateway: yes
+       ipv4  : 192.168.1.3
+       -> usable
+
+   best local address: 192.168.1.3
    ```
 
-5. 查受控端 IP：`ipconfig`，或者设置窗口里的"本机地址"。
+   规则：**只认标了 `usable` 的那个**，通常是"以太网"或"WLAN"。
+   `VMnet1` / `VMnet8` / `vEthernet (WSL)` / `TAP-*` 全部不用。
 
-> 也可以不改 ini，用命令行覆盖角色：`lankvm.exe agent` / `lankvm.exe master`。
+5. 用设置窗口配角色（推荐，不用手改 ini）：
+
+   - **受控端**：托盘右键 → 设置 → 选"受控端（这台被控制）" → 保存
+   - **主控端**：选"主控端" → "对端 IP"填第 4 步的 usable 地址 → 勾"启动时自动连接" → 保存
+
+   保存后程序会按新角色自动重启，托盘提示和标题栏都会跟着变。
+
+6. 也可以命令行指定角色，**程序会把角色写回 ini**，下次双击就是正确角色：
+
+   ```cmd
+   lankvm.exe agent
+   lankvm.exe master
+   ```
+
+> 想改回主控端：设置窗口里选回去，或者 `lankvm.exe master`。
 
 ---
 
@@ -90,13 +103,19 @@ D:\LanKVM\lankvm.exe master
 
 | 步骤 | 预期 |
 |---|---|
-| 启动 `lankvm.exe agent` | 控制台打印 `LanKVM running as agent`，托盘出现图标 |
-| 鼠标悬停托盘图标 | 提示 `LanKVM [受控端] 监听中` |
+| 启动 `lankvm.exe agent` | 控制台打出 `role / config / local / listen` 四行信息；窗口标题是 `LanKVM [受控端] 24800`；托盘出现图标 |
+| 鼠标悬停托盘图标 | 提示 `LanKVM [受控端] 192.168.x.x:24800 监听中`（地址与 `--netinfo` 一致） |
+| 再启动一次同角色 | 弹窗"已经有一个相同角色的 LanKVM 在运行"，新进程退出，原进程不受影响 |
 | 右键托盘 | 弹出菜单：连接/重连、断开连接、设置...、打开日志、关于、退出 |
-| 点"设置..." | 弹出配置窗口，能改 IP、端口、PSK、边缘方向、四个开关 |
+| 点"设置..." | 顶部有角色单选；选"受控端"时，对端 IP / 边缘方向 / 自动连接三项变灰 |
+| 点"关于" | 显示版本、角色、本机地址、配置文件路径 |
 | 点"退出" | 进程退出，托盘图标消失 |
 
-**失败**：托盘没图标 → 看 `lankvm.log` 有没有 `cannot create message window`。
+**失败**：
+
+- 托盘没图标 → 看 `lankvm.log` 有没有 `cannot create message window`
+- 托盘显示的角色和你刚启动的不一致 → 那是**旧实例**。新版本会阻止同角色重复启动，先退出托盘里所有 LanKVM 再试
+- 标题栏和 ini 都是 master，但你明明带了 `agent` 参数 → 确认参数没被快捷方式吞掉，或直接用设置窗口选角色
 
 ---
 
@@ -331,6 +350,9 @@ D:\LanKVM\lankvm.exe master
 | 现象 | 最可能的原因 | 处理 |
 |---|---|---|
 | 连不上，日志 `cannot reach` | 防火墙 / 不同网段 / 受控端没启动 | 跑 `setup-firewall.cmd`，`ping` 对端，`netstat -ano \| findstr 24800` |
+| 不知道填哪个 IP | 有 VMware / WSL 虚拟网卡 | 跑 `lankvm.exe --netinfo`，只认 `usable` 那一行 |
+| 托盘角色和启动参数不一致 | 旧实例没退出 | 新版会拒绝同角色重复启动；先退出所有 LanKVM |
+| 改了 ini 但程序没变化 | 程序只在启动时读配置 | 退出重开，或用设置窗口改（保存后自动重启角色） |
 | `authentication rejected` | PSK 不一致 | 两端抄同一串 |
 | 连上但鼠标不动 | 受控端未以管理员运行 / UIPI | 用管理员启动受控端 |
 | 切到远程后光标不动 | Raw Input 被钩子抑制（已知风险） | 记录现象并反馈，改采集方案 |
