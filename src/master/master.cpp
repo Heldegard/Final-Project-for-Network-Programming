@@ -694,7 +694,7 @@ struct Master::Impl {
                 continue;
             }
             std::string err;
-            Socket sock = tcp_connect(cfg.peer_ip, cfg.port, 2000, &err);
+            Socket sock = tcp_connect(cfg.peer_ip, cfg.port, 4000, &err);
             if (!sock.valid()) {
                 set_status("cannot reach " + cfg.peer_ip + ": " + err);
                 Sleep(1000);

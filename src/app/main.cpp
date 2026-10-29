@@ -1,6 +1,7 @@
 #include <winsock2.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -222,10 +223,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 void print_usage() {
     std::printf(
         "LanKVM 0.1.1\n"
-        "usage: lankvm [master|agent] [--config <path>] [--netinfo] [--selftest]\n"
-        "  master    capture local input and drive the peer (default)\n"
-        "  agent     listen and inject input received from the master\n"
-        "  --netinfo list every network adapter and which address to use\n");
+        "usage: lankvm [master|agent] [--config <path>] [--netinfo] [--probe <ip> [port]]\n"
+        "  master      capture local input and drive the peer (default)\n"
+        "  agent       listen and inject input received from the master\n"
+        "  --netinfo   list every network adapter and which address to use\n"
+        "  --probe     test one TCP connect and explain the result\n");
 }
 
 int run_selftest() {
@@ -287,6 +289,8 @@ int main(int argc, char** argv) {
     std::wstring config_path;
     bool selftest = false;
     bool netinfo = false;
+    std::string probe_host;
+    uint16_t probe_port = 24800;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -300,6 +304,17 @@ int main(int argc, char** argv) {
         }
         if (arg == "--netinfo") {
             netinfo = true;
+            continue;
+        }
+        if (arg == "--probe" && i + 1 < argc) {
+            probe_host = argv[++i];
+            if (i + 1 < argc) {
+                int candidate = std::atoi(argv[i + 1]);
+                if (candidate > 0 && candidate < 65536) {
+                    probe_port = static_cast<uint16_t>(candidate);
+                    ++i;
+                }
+            }
             continue;
         }
         if (arg == "--config" && i + 1 < argc) {
@@ -329,6 +344,47 @@ int main(int argc, char** argv) {
         std::printf("%s", report.c_str());
         lk::net_shutdown();
         return 0;
+    }
+
+    if (!probe_host.empty()) {
+        if (!lk::net_init()) {
+            std::printf("WSAStartup failed\n");
+            return 1;
+        }
+        int elapsed = -1;
+        std::string detail;
+        lk::ProbeResult result = lk::probe_tcp(probe_host, probe_port, 4000, &elapsed, &detail);
+        const char* verdict = "ERROR";
+        const char* advice = "";
+        switch (result) {
+            case lk::ProbeResult::Ok:
+                verdict = "OK";
+                advice = "端口开放：对端程序在监听，网络可达。";
+                break;
+            case lk::ProbeResult::Refused:
+                verdict = "REFUSED";
+                advice = "主机可达，但端口没人监听：对端 LanKVM 没启动，或端口填错。";
+                break;
+            case lk::ProbeResult::Timeout:
+                verdict = "TIMEOUT";
+                advice = "完全没有回应：对端关机 / 防火墙丢包 / 两机不在同一网络（校园网客户端隔离）。";
+                break;
+            case lk::ProbeResult::Unreachable:
+                verdict = "UNREACHABLE";
+                advice = "路由不可达：不在同一网段，检查 IP 或换网络。";
+                break;
+            case lk::ProbeResult::Error:
+                verdict = "ERROR";
+                advice = "本地错误，见 detail。";
+                break;
+        }
+        std::printf("probe %s:%u -> %s (%d ms)\n", probe_host.c_str(),
+                    static_cast<unsigned>(probe_port), verdict, elapsed);
+        std::printf("detail : %s\n", detail.c_str());
+        std::printf("local  : %s\n", lk::local_ipv4_for(probe_host).c_str());
+        std::printf("%s\n", advice);
+        lk::net_shutdown();
+        return (result == lk::ProbeResult::Ok || result == lk::ProbeResult::Refused) ? 0 : 1;
     }
 
     if (!lk::net_init()) {

@@ -451,4 +451,96 @@ std::string describe_adapters() {
     return out;
 }
 
+ProbeResult probe_tcp(const std::string& host, uint16_t port, int timeout_ms, int* elapsed_ms,
+                      std::string* detail) {
+    if (elapsed_ms) {
+        *elapsed_ms = -1;
+    }
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    char port_text[16]{};
+    std::snprintf(port_text, sizeof(port_text), "%u", static_cast<unsigned>(port));
+
+    addrinfo* result = nullptr;
+    if (getaddrinfo(host.c_str(), port_text, &hints, &result) != 0 || result == nullptr) {
+        if (detail) {
+            *detail = "cannot resolve " + host;
+        }
+        return ProbeResult::Error;
+    }
+    SOCKET s = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+    if (s == INVALID_SOCKET) {
+        freeaddrinfo(result);
+        if (detail) {
+            *detail = wsa_error_text(WSAGetLastError());
+        }
+        return ProbeResult::Error;
+    }
+    set_nonblocking(s, true);
+    const ULONGLONG start = GetTickCount64();
+
+    int rc = connect(s, result->ai_addr, static_cast<int>(result->ai_addrlen));
+    freeaddrinfo(result);
+
+    auto finish = [&](ProbeResult verdict, const std::string& note) {
+        if (elapsed_ms) {
+            *elapsed_ms = static_cast<int>(GetTickCount64() - start);
+        }
+        if (detail) {
+            *detail = note;
+        }
+        closesocket(s);
+        return verdict;
+    };
+
+    if (rc == 0) {
+        return finish(ProbeResult::Ok, "connected");
+    }
+    int code = WSAGetLastError();
+    if (code != WSAEWOULDBLOCK && code != WSAEINPROGRESS) {
+        if (code == WSAECONNREFUSED) {
+            return finish(ProbeResult::Refused, "connection refused");
+        }
+        if (code == WSAEHOSTUNREACH || code == WSAENETUNREACH) {
+            return finish(ProbeResult::Unreachable, "no route to host");
+        }
+        return finish(ProbeResult::Error, wsa_error_text(code));
+    }
+
+    fd_set write_set;
+    FD_ZERO(&write_set);
+    FD_SET(s, &write_set);
+    fd_set error_set;
+    FD_ZERO(&error_set);
+    FD_SET(s, &error_set);
+    timeval tv{};
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    int selected = select(0, nullptr, &write_set, &error_set, &tv);
+    if (selected == 0) {
+        return finish(ProbeResult::Timeout, "no response");
+    }
+    if (selected < 0) {
+        return finish(ProbeResult::Error, wsa_error_text(WSAGetLastError()));
+    }
+    int so_error = 0;
+    int length = sizeof(so_error);
+    getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&so_error), &length);
+    if (so_error == 0) {
+        return finish(ProbeResult::Ok, "connected");
+    }
+    if (so_error == WSAECONNREFUSED) {
+        return finish(ProbeResult::Refused, "connection refused");
+    }
+    if (so_error == WSAETIMEDOUT) {
+        return finish(ProbeResult::Timeout, "timed out");
+    }
+    if (so_error == WSAEHOSTUNREACH || so_error == WSAENETUNREACH) {
+        return finish(ProbeResult::Unreachable, "no route to host");
+    }
+    return finish(ProbeResult::Error, wsa_error_text(so_error));
+}
+
 }  // namespace lk

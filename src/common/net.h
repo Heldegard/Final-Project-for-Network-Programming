@@ -55,4 +55,12 @@ std::string local_ipv4_for(const std::string& peer);
 // Human readable dump of every adapter and why it was accepted or skipped.
 std::string describe_adapters();
 
+enum class ProbeResult { Ok, Refused, Timeout, Unreachable, Error };
+
+// Single TCP connect attempt with a clear verdict. Unlike tcp_connect this
+// distinguishes "host reached, nothing listening" (Refused) from "no answer at
+// all" (Timeout), which is what makes it useful for diagnosing a LAN.
+ProbeResult probe_tcp(const std::string& host, uint16_t port, int timeout_ms, int* elapsed_ms,
+                      std::string* detail);
+
 }  // namespace lk
