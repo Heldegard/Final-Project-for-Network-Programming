@@ -948,10 +948,16 @@ struct Master::Impl {
                     continue;
                 }
                 uint32_t id = next_file_id_.fetch_add(1);
-                connection->send(MsgType::FileBegin, msg::file_begin(id, size, path));
+                LK_INFO("sending '%s' (%llu bytes) as file #%u", path.c_str(),
+                        static_cast<unsigned long long>(size), id);
+                if (!connection->send(MsgType::FileBegin, msg::file_begin(id, size, path))) {
+                    LK_ERROR("connection lost before sending %s", path.c_str());
+                    continue;
+                }
 
                 std::vector<char> buffer(64 * 1024);
                 uint64_t offset = 0;
+                bool send_failed = false;
                 while (in) {
                     in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                     std::streamsize got = in.gcount();
@@ -962,13 +968,23 @@ struct Master::Impl {
                                           msg::file_chunk(id, offset,
                                                           reinterpret_cast<const uint8_t*>(buffer.data()),
                                                           static_cast<size_t>(got)))) {
+                        send_failed = true;
                         break;
                     }
                     offset += static_cast<uint64_t>(got);
                 }
                 connection->send(MsgType::FileEnd, msg::file_end(id));
-                LK_INFO("sent file '%s' (%llu bytes)", path.c_str(),
-                        static_cast<unsigned long long>(offset));
+                if (send_failed || offset != size) {
+                    LK_ERROR("file '%s' incomplete: sent %llu of %llu bytes", path.c_str(),
+                             static_cast<unsigned long long>(offset),
+                             static_cast<unsigned long long>(size));
+                    notify_user("LanKVM 文件发送中断", "网络中断或对端退出，文件未传完");
+                } else {
+                    LK_INFO("sent file '%s' (%llu bytes)", path.c_str(),
+                            static_cast<unsigned long long>(offset));
+                    notify_user("LanKVM 文件已发送",
+                                std::filesystem::path(fs_path).filename().string());
+                }
             }
         }).detach();
     }

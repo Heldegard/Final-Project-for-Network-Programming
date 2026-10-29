@@ -20,6 +20,49 @@ bool open_with_retry(HWND owner) {
     return false;
 }
 
+constexpr uint8_t kFormatPng = 4;
+
+UINT png_format() {
+    static const UINT id = RegisterClipboardFormatW(L"PNG");
+    return id;
+}
+
+// CF_DIBV5 carries a BITMAPV5HEADER; CF_DIB expects a plain BITMAPINFOHEADER
+// (plus colour masks when BI_BITFIELDS). Everything after the header is the
+// same pixel data, so this is a header rewrite.
+bool dibv5_to_dib(const std::vector<uint8_t>& src, std::vector<uint8_t>* out) {
+    if (src.size() < sizeof(BITMAPV5HEADER)) {
+        return false;
+    }
+    const auto* v5 = reinterpret_cast<const BITMAPV5HEADER*>(src.data());
+    if (v5->bV5Size < sizeof(BITMAPINFOHEADER) || src.size() < v5->bV5Size) {
+        return false;
+    }
+
+    BITMAPINFOHEADER bi{};
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = v5->bV5Width;
+    bi.biHeight = v5->bV5Height;
+    bi.biPlanes = v5->bV5Planes;
+    bi.biBitCount = v5->bV5BitCount;
+    bi.biCompression = v5->bV5Compression;
+    bi.biSizeImage = v5->bV5SizeImage;
+    bi.biXPelsPerMeter = v5->bV5XPelsPerMeter;
+    bi.biYPelsPerMeter = v5->bV5YPelsPerMeter;
+    bi.biClrUsed = v5->bV5ClrUsed;
+    bi.biClrImportant = v5->bV5ClrImportant;
+
+    out->clear();
+    const auto* header_bytes = reinterpret_cast<const uint8_t*>(&bi);
+    out->insert(out->end(), header_bytes, header_bytes + sizeof(bi));
+    if (bi.biCompression == BI_BITFIELDS) {
+        const auto* masks = reinterpret_cast<const uint8_t*>(&v5->bV5RedMask);
+        out->insert(out->end(), masks, masks + sizeof(DWORD) * 3);
+    }
+    out->insert(out->end(), src.begin() + v5->bV5Size, src.end());
+    return true;
+}
+
 }  // namespace
 
 bool utf8_to_wide(const std::string& in, std::wstring* out) {
@@ -91,10 +134,50 @@ bool clipboard_read(ClipBlob* out, std::string* err) {
                 GlobalUnlock(handle);
             }
         }
-    } else {
-        if (err) {
-            *err = "unsupported clipboard format";
+    } else if (IsClipboardFormatAvailable(CF_DIBV5)) {
+        // Screenshot tools often publish DIBV5 only. Convert it to a plain DIB
+        // so the receiving side can put a widely supported format on the
+        // clipboard.
+        HANDLE handle = GetClipboardData(CF_DIBV5);
+        if (handle) {
+            SIZE_T size = GlobalSize(handle);
+            void* data = GlobalLock(handle);
+            if (data && size > 0) {
+                std::vector<uint8_t> raw(static_cast<size_t>(size));
+                std::memcpy(raw.data(), data, raw.size());
+                std::vector<uint8_t> dib;
+                if (dibv5_to_dib(raw, &dib)) {
+                    out->format = 2;
+                    out->data = std::move(dib);
+                    ok = true;
+                }
+            }
+            if (data) {
+                GlobalUnlock(handle);
+            }
         }
+    } else {
+        const UINT png = png_format();
+        if (png != 0 && IsClipboardFormatAvailable(png)) {
+            HANDLE handle = GetClipboardData(png);
+            if (handle) {
+                SIZE_T size = GlobalSize(handle);
+                void* data = GlobalLock(handle);
+                if (data && size > 0) {
+                    out->format = kFormatPng;
+                    out->data.resize(size);
+                    std::memcpy(out->data.data(), data, size);
+                    ok = true;
+                }
+                if (data) {
+                    GlobalUnlock(handle);
+                }
+            }
+        }
+    }
+
+    if (!ok && err) {
+        *err = "unsupported clipboard format";
     }
 
     CloseClipboard();
@@ -154,6 +237,27 @@ bool clipboard_write(const ClipBlob& blob, std::string* err) {
                 GlobalFree(mem);
             }
         }
+    } else if (blob.format == kFormatPng) {
+        // Peer only had a PNG image; publish it under the registered PNG
+        // format. Word/Chrome/Explorer accept it, Paint does not.
+        const UINT png = png_format();
+        if (png != 0) {
+            HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, blob.data.size());
+            if (mem) {
+                void* dst = GlobalLock(mem);
+                if (dst) {
+                    std::memcpy(dst, blob.data.data(), blob.data.size());
+                    GlobalUnlock(mem);
+                    if (SetClipboardData(png, mem)) {
+                        ok = true;
+                    } else {
+                        GlobalFree(mem);
+                    }
+                } else {
+                    GlobalFree(mem);
+                }
+            }
+        }
     }
 
     CloseClipboard();
@@ -188,6 +292,36 @@ bool clipboard_read_files(std::vector<std::string>* paths) {
     }
     CloseClipboard();
     return ok;
+}
+
+std::string clipboard_formats_report() {
+    std::string out;
+    if (!OpenClipboard(nullptr)) {
+        return "cannot open clipboard\n";
+    }
+    out += "formats on the clipboard:\n";
+    UINT format = 0;
+    while ((format = EnumClipboardFormats(format)) != 0) {
+        wchar_t name[128]{};
+        if (GetClipboardFormatNameW(format, name, static_cast<int>(std::size(name))) > 0) {
+            std::string utf8;
+            wide_to_utf8(std::wstring(name), &utf8);
+            out += "  [" + std::to_string(format) + "] " + utf8 + "\n";
+        } else {
+            out += "  [" + std::to_string(format) + "] (standard id)\n";
+        }
+    }
+    CloseClipboard();
+
+    ClipBlob blob;
+    std::string err;
+    if (clipboard_read(&blob, &err)) {
+        out += "readable by LanKVM: yes, format=" + std::to_string(blob.format) +
+               " bytes=" + std::to_string(blob.data.size()) + "\n";
+    } else {
+        out += "readable by LanKVM: no (" + err + ")\n";
+    }
+    return out;
 }
 
 }  // namespace lk

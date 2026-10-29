@@ -227,6 +227,7 @@ void print_usage() {
         "  master      capture local input and drive the peer (default)\n"
         "  agent       listen and inject input received from the master\n"
         "  --netinfo   list every network adapter and which address to use\n"
+        "  --clipinfo  list clipboard formats and whether LanKVM can read them\n"
         "  --probe     test one TCP connect and explain the result\n");
 }
 
@@ -305,6 +306,10 @@ int main(int argc, char** argv) {
         if (arg == "--netinfo") {
             netinfo = true;
             continue;
+        }
+        if (arg == "--clipinfo") {
+            std::printf("%s", lk::clipboard_formats_report().c_str());
+            return 0;
         }
         if (arg == "--probe" && i + 1 < argc) {
             probe_host = argv[++i];

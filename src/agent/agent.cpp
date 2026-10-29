@@ -52,9 +52,11 @@ struct InjectJob {
 
 struct FileRecv {
     std::ofstream out;
-    std::wstring path;
+    std::wstring path;        // final name, only visible once complete
+    std::wstring part_path;   // temporary .part file being written
     uint64_t size = 0;
     uint64_t written = 0;
+    bool failed = false;
 };
 
 uint64_t now_ms() { return GetTickCount64(); }
@@ -482,27 +484,37 @@ struct Agent::Impl {
 
         FileRecv recv;
         recv.path = target.wstring();
+        recv.part_path = target.wstring() + L".part";
         recv.size = size;
-        recv.out.open(target, std::ios::binary | std::ios::trunc);
+        recv.out.open(std::filesystem::path(recv.part_path),
+                      std::ios::binary | std::ios::trunc);
         if (!recv.out.is_open()) {
-            LK_ERROR("cannot create %ls", target.c_str());
+            LK_ERROR("cannot create %ls", recv.part_path.c_str());
             connection.send(MsgType::FileAck, msg::file_ack(id, 1, "cannot create file"));
             return;
         }
         files[id] = std::move(recv);
-        LK_INFO("receiving file #%u '%s' (%llu bytes)", id, leaf.c_str(),
+        LK_INFO("receiving file #%u '%s' (%llu bytes) into .part", id, leaf.c_str(),
                 static_cast<unsigned long long>(size));
     }
 
     void receive_file_chunk(std::map<uint32_t, FileRecv>& files, uint32_t id, uint64_t offset,
                             const std::vector<uint8_t>& data) {
         auto it = files.find(id);
-        if (it == files.end()) {
+        if (it == files.end() || it->second.failed) {
             return;
         }
         it->second.out.seekp(static_cast<std::streamoff>(offset));
         it->second.out.write(reinterpret_cast<const char*>(data.data()),
                              static_cast<std::streamsize>(data.size()));
+        if (!it->second.out) {
+            // Disk full, device removed, permission change: remember the failure
+            // so the transfer is not reported as successful.
+            LK_ERROR("write failed for file #%u at offset %llu", id,
+                     static_cast<unsigned long long>(offset));
+            it->second.failed = true;
+            return;
+        }
         it->second.written += data.size();
     }
 
@@ -513,22 +525,46 @@ struct Agent::Impl {
             return;
         }
         it->second.out.close();
-        bool ok = it->second.written == it->second.size;
-        std::wstring path = it->second.path;
+        const bool size_ok = it->second.written == it->second.size;
+        const bool ok = size_ok && !it->second.failed;
+        std::wstring final_path = it->second.path;
+        std::wstring part_path = it->second.part_path;
         uint64_t size = it->second.size;
+        uint64_t written = it->second.written;
         files.erase(it);
-        connection.send(MsgType::FileAck, msg::file_ack(id, ok ? 0 : 2, ok ? "ok" : "size mismatch"));
 
+        std::error_code ec;
         if (ok) {
+            std::filesystem::remove(std::filesystem::path(final_path), ec);
+            ec.clear();
+            std::filesystem::rename(std::filesystem::path(part_path),
+                                    std::filesystem::path(final_path), ec);
+            if (ec) {
+                LK_ERROR("cannot rename .part to final name: %s", ec.message().c_str());
+            }
+        } else {
+            std::filesystem::remove(std::filesystem::path(part_path), ec);
+        }
+
+        const bool committed = ok && !ec;
+        connection.send(MsgType::FileAck,
+                        msg::file_ack(id, committed ? 0 : 2,
+                                      committed ? "ok" : (size_ok ? "write failed" : "size mismatch")));
+
+        if (committed) {
             char text[512]{};
             std::snprintf(text, sizeof(text), "已保存 %llu KB 文件到下载目录",
                           static_cast<unsigned long long>(size / 1024));
             std::string utf8;
-            wide_to_utf8(path, &utf8);
-            LK_INFO("file saved: %s", utf8.c_str());
+            wide_to_utf8(final_path, &utf8);
+            LK_INFO("file saved: %s (%llu bytes)", utf8.c_str(),
+                    static_cast<unsigned long long>(size));
             notify_user("LanKVM 收到文件", text);
         } else {
-            LK_WARN("file #%u size mismatch", id);
+            LK_WARN("file #%u incomplete: %llu of %llu bytes, partial file removed", id,
+                    static_cast<unsigned long long>(written),
+                    static_cast<unsigned long long>(size));
+            notify_user("LanKVM 文件接收失败", "传输中断，未完成的文件已删除，请重试");
         }
     }
 

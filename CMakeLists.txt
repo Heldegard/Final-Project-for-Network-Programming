@@ -51,8 +51,12 @@ add_executable(loopback_test tests/loopback_test.cpp)
 target_link_libraries(loopback_test PRIVATE lankvm_core)
 add_test(NAME loopback COMMAND loopback_test)
 
+add_executable(file_transfer_test tests/file_transfer_test.cpp)
+target_link_libraries(file_transfer_test PRIVATE lankvm_core)
+add_test(NAME file_transfer COMMAND file_transfer_test)
+
 if(MINGW)
-    foreach(target lankvm lankvm_tests loopback_test)
+    foreach(target lankvm lankvm_tests loopback_test file_transfer_test)
         target_link_options(${target} PRIVATE -static)
     endforeach()
 endif()
