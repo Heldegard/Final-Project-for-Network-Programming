@@ -492,6 +492,14 @@ int main(int argc, char** argv) {
 
     SetTimer(app.hwnd, kTimerId, 1000, nullptr);
 
+    // A master that was started with auto-connect off looks completely dead:
+    // no connection attempts, no errors. Say so out loud instead of waiting.
+    if (app.master && !app.cfg.auto_connect) {
+        post_balloon("LanKVM 未自动连接",
+                     "设置里没有勾选「启动时自动连接」。右键托盘图标 → 连接/重连，"
+                     "或打开设置勾选后保存。");
+    }
+
     if (first_run) {
         std::printf("first run: config written to %ls\n", app.config_path.c_str());
         std::printf("pre-shared key: %s\n", app.cfg.psk_hex.c_str());

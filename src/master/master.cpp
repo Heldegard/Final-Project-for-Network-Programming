@@ -999,6 +999,13 @@ struct Master::Impl {
             edge_ = Edge::Right;
         }
         connect_enabled = cfg.auto_connect;
+        if (!connect_enabled) {
+            // Silent waiting is the single most confusing state this program can
+            // be in, so make the reason visible in both the log and the tooltip.
+            set_status("not connected: auto-connect is off, use tray -> connect");
+            LK_WARN("auto-connect disabled in config; nothing will happen until the "
+                    "tray menu 'connect' is used");
+        }
         running = true;
 
         std::promise<bool> ready;

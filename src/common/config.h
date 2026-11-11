@@ -14,7 +14,9 @@ struct Config {
     bool clipboard = true;
     bool encrypt_clipboard = true;
     bool dropzone = true;
-    bool auto_connect = false;
+    // Master connects on startup by default: a silent "waiting" state is far
+    // more confusing than an automatic retry loop that reports its failures.
+    bool auto_connect = true;
     std::string download_dir;             // agent only, empty = Downloads\LanKVM
     std::string log_level = "info";
     int heartbeat_ms = 1000;
