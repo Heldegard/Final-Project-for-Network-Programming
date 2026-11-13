@@ -149,8 +149,8 @@ std::vector<uint8_t> file_chunk(uint32_t id, uint64_t offset, const uint8_t* dat
 bool parse_file_chunk(const std::vector<uint8_t>& p, uint32_t* id, uint64_t* offset,
                       std::vector<uint8_t>* data);
 
-std::vector<uint8_t> file_end(uint32_t id);
-bool parse_file_end(const std::vector<uint8_t>& p, uint32_t* id);
+std::vector<uint8_t> file_end(uint32_t id, const uint8_t hash[32]);
+bool parse_file_end(const std::vector<uint8_t>& p, uint32_t* id, bool* has_hash, uint8_t hash[32]);
 
 std::vector<uint8_t> file_ack(uint32_t id, uint8_t status, const std::string& message);
 bool parse_file_ack(const std::vector<uint8_t>& p, uint32_t* id, uint8_t* status, std::string* message);

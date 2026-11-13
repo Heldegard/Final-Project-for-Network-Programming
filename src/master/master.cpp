@@ -956,6 +956,7 @@ struct Master::Impl {
                 }
 
                 std::vector<char> buffer(64 * 1024);
+                Sha256Stream hasher;
                 uint64_t offset = 0;
                 bool send_failed = false;
                 while (in) {
@@ -964,6 +965,7 @@ struct Master::Impl {
                     if (got <= 0) {
                         break;
                     }
+                    hasher.update(buffer.data(), static_cast<size_t>(got));
                     if (!connection->send(MsgType::FileChunk,
                                           msg::file_chunk(id, offset,
                                                           reinterpret_cast<const uint8_t*>(buffer.data()),
@@ -973,15 +975,18 @@ struct Master::Impl {
                     }
                     offset += static_cast<uint64_t>(got);
                 }
-                connection->send(MsgType::FileEnd, msg::file_end(id));
+                uint8_t digest[32]{};
+                const bool have_digest = hasher.finish(digest);
+                connection->send(MsgType::FileEnd, msg::file_end(id, have_digest ? digest : nullptr));
                 if (send_failed || offset != size) {
                     LK_ERROR("file '%s' incomplete: sent %llu of %llu bytes", path.c_str(),
                              static_cast<unsigned long long>(offset),
                              static_cast<unsigned long long>(size));
                     notify_user("LanKVM 文件发送中断", "网络中断或对端退出，文件未传完");
                 } else {
-                    LK_INFO("sent file '%s' (%llu bytes)", path.c_str(),
-                            static_cast<unsigned long long>(offset));
+                    LK_INFO("sent file '%s' (%llu bytes) sha256=%s", path.c_str(),
+                            static_cast<unsigned long long>(offset),
+                            have_digest ? to_hex(digest, 32).c_str() : "n/a");
                     notify_user("LanKVM 文件已发送",
                                 std::filesystem::path(fs_path).filename().string());
                 }

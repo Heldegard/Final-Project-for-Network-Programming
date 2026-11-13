@@ -8,7 +8,7 @@
 namespace lk {
 namespace {
 
-bool ok(NTSTATUS st) { return BCRYPT_SUCCESS(st); }
+bool nt_ok(NTSTATUS st) { return BCRYPT_SUCCESS(st); }
 
 struct AlgHandle {
     BCRYPT_ALG_HANDLE handle = nullptr;
@@ -24,24 +24,24 @@ struct AlgHandle {
 bool crypto_init() {
     BCRYPT_ALG_HANDLE alg = nullptr;
     NTSTATUS st = BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM, nullptr, 0);
-    if (!ok(st)) {
+    if (!nt_ok(st)) {
         return false;
     }
     st = BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
                            reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_GCM)),
                            sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
     BCryptCloseAlgorithmProvider(alg, 0);
-    return ok(st);
+    return nt_ok(st);
 }
 
 std::vector<uint8_t> sha256(const void* data, size_t len) {
     std::vector<uint8_t> digest;
     AlgHandle alg;
-    if (!ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_SHA256_ALGORITHM, nullptr, 0))) {
+    if (!nt_ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_SHA256_ALGORITHM, nullptr, 0))) {
         return digest;
     }
     BCRYPT_HASH_HANDLE hash = nullptr;
-    if (!ok(BCryptCreateHash(alg.handle, &hash, nullptr, 0, nullptr, 0, 0))) {
+    if (!nt_ok(BCryptCreateHash(alg.handle, &hash, nullptr, 0, nullptr, 0, 0))) {
         return digest;
     }
     digest.resize(32);
@@ -51,7 +51,7 @@ std::vector<uint8_t> sha256(const void* data, size_t len) {
     }
     NTSTATUS st = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
     BCryptDestroyHash(hash);
-    if (!ok(st)) {
+    if (!nt_ok(st)) {
         digest.clear();
     }
     return digest;
@@ -64,12 +64,12 @@ std::vector<uint8_t> sha256(const std::vector<uint8_t>& data) {
 std::vector<uint8_t> hmac_sha256(const std::vector<uint8_t>& key, const void* data, size_t len) {
     std::vector<uint8_t> digest;
     AlgHandle alg;
-    if (!ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_SHA256_ALGORITHM, nullptr,
+    if (!nt_ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_SHA256_ALGORITHM, nullptr,
                                         BCRYPT_ALG_HANDLE_HMAC_FLAG))) {
         return digest;
     }
     BCRYPT_HASH_HANDLE hash = nullptr;
-    if (!ok(BCryptCreateHash(alg.handle, &hash, nullptr, 0,
+    if (!nt_ok(BCryptCreateHash(alg.handle, &hash, nullptr, 0,
                              const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0))) {
         return digest;
     }
@@ -80,7 +80,7 @@ std::vector<uint8_t> hmac_sha256(const std::vector<uint8_t>& key, const void* da
     }
     NTSTATUS st = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
     BCryptDestroyHash(hash);
-    if (!ok(st)) {
+    if (!nt_ok(st)) {
         digest.clear();
     }
     return digest;
@@ -89,16 +89,16 @@ std::vector<uint8_t> hmac_sha256(const std::vector<uint8_t>& key, const void* da
 bool aes256_gcm_encrypt(const uint8_t key[32], const uint8_t nonce[12], const uint8_t* plain,
                         size_t len, std::vector<uint8_t>* cipher, uint8_t tag[16]) {
     AlgHandle alg;
-    if (!ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_AES_ALGORITHM, nullptr, 0))) {
+    if (!nt_ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_AES_ALGORITHM, nullptr, 0))) {
         return false;
     }
-    if (!ok(BCryptSetProperty(alg.handle, BCRYPT_CHAINING_MODE,
+    if (!nt_ok(BCryptSetProperty(alg.handle, BCRYPT_CHAINING_MODE,
                               reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_GCM)),
                               sizeof(BCRYPT_CHAIN_MODE_GCM), 0))) {
         return false;
     }
     BCRYPT_KEY_HANDLE key_handle = nullptr;
-    if (!ok(BCryptGenerateSymmetricKey(alg.handle, &key_handle, nullptr, 0,
+    if (!nt_ok(BCryptGenerateSymmetricKey(alg.handle, &key_handle, nullptr, 0,
                                        const_cast<PUCHAR>(key), 32, 0))) {
         return false;
     }
@@ -116,7 +116,7 @@ bool aes256_gcm_encrypt(const uint8_t key[32], const uint8_t nonce[12], const ui
                                 &info, nullptr, 0, cipher->empty() ? nullptr : cipher->data(),
                                 static_cast<ULONG>(len), &written, 0);
     BCryptDestroyKey(key_handle);
-    if (!ok(st)) {
+    if (!nt_ok(st)) {
         cipher->clear();
         return false;
     }
@@ -127,16 +127,16 @@ bool aes256_gcm_encrypt(const uint8_t key[32], const uint8_t nonce[12], const ui
 bool aes256_gcm_decrypt(const uint8_t key[32], const uint8_t nonce[12], const uint8_t* cipher,
                         size_t len, const uint8_t tag[16], std::vector<uint8_t>* plain) {
     AlgHandle alg;
-    if (!ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_AES_ALGORITHM, nullptr, 0))) {
+    if (!nt_ok(BCryptOpenAlgorithmProvider(&alg.handle, BCRYPT_AES_ALGORITHM, nullptr, 0))) {
         return false;
     }
-    if (!ok(BCryptSetProperty(alg.handle, BCRYPT_CHAINING_MODE,
+    if (!nt_ok(BCryptSetProperty(alg.handle, BCRYPT_CHAINING_MODE,
                               reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_GCM)),
                               sizeof(BCRYPT_CHAIN_MODE_GCM), 0))) {
         return false;
     }
     BCRYPT_KEY_HANDLE key_handle = nullptr;
-    if (!ok(BCryptGenerateSymmetricKey(alg.handle, &key_handle, nullptr, 0,
+    if (!nt_ok(BCryptGenerateSymmetricKey(alg.handle, &key_handle, nullptr, 0,
                                        const_cast<PUCHAR>(key), 32, 0))) {
         return false;
     }
@@ -154,7 +154,7 @@ bool aes256_gcm_decrypt(const uint8_t key[32], const uint8_t nonce[12], const ui
                                 &info, nullptr, 0, plain->empty() ? nullptr : plain->data(),
                                 static_cast<ULONG>(len), &written, 0);
     BCryptDestroyKey(key_handle);
-    if (!ok(st)) {
+    if (!nt_ok(st)) {
         plain->clear();
         return false;
     }
@@ -210,6 +210,56 @@ bool constant_time_equal(const uint8_t* a, const uint8_t* b, size_t len) {
         diff |= static_cast<uint8_t>(a[i] ^ b[i]);
     }
     return diff == 0;
+}
+
+Sha256Stream::Sha256Stream() {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    if (!nt_ok(BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0))) {
+        return;
+    }
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (!nt_ok(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0))) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return;
+    }
+    alg_ = alg;
+    hash_ = hash;
+    ok_ = true;
+}
+
+Sha256Stream::~Sha256Stream() { release(); }
+
+void Sha256Stream::release() {
+    if (hash_) {
+        BCryptDestroyHash(static_cast<BCRYPT_HASH_HANDLE>(hash_));
+        hash_ = nullptr;
+    }
+    if (alg_) {
+        BCryptCloseAlgorithmProvider(static_cast<BCRYPT_ALG_HANDLE>(alg_), 0);
+        alg_ = nullptr;
+    }
+    ok_ = false;
+}
+
+void Sha256Stream::update(const void* data, size_t len) {
+    if (!ok_ || len == 0) {
+        return;
+    }
+    NTSTATUS st = BCryptHashData(static_cast<BCRYPT_HASH_HANDLE>(hash_),
+                                 const_cast<PUCHAR>(static_cast<const UCHAR*>(data)),
+                                 static_cast<ULONG>(len), 0);
+    if (!nt_ok(st)) {
+        ok_ = false;
+    }
+}
+
+bool Sha256Stream::finish(uint8_t out[32]) {
+    if (!ok_) {
+        return false;
+    }
+    NTSTATUS st = BCryptFinishHash(static_cast<BCRYPT_HASH_HANDLE>(hash_), out, 32, 0);
+    ok_ = false;
+    return nt_ok(st);
 }
 
 }  // namespace lk

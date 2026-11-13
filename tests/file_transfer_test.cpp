@@ -3,7 +3,10 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -77,45 +80,76 @@ int main() {
     }
     check(master.connected(), "master connected to agent");
 
-    // Source file with a recognisable pattern.
-    const std::filesystem::path source = root / "payload.bin";
-    std::vector<char> expected(300 * 1024);
-    for (size_t i = 0; i < expected.size(); ++i) {
-        expected[i] = static_cast<char>((i * 31 + 7) & 0xFF);
+    // Source file with a recognisable pattern. LANKVM_TEST_MB lets the same
+    // test push a video-sized payload without keeping it in memory.
+    size_t total = 300 * 1024;
+    if (const char* mb = std::getenv("LANKVM_TEST_MB")) {
+        long value = std::atol(mb);
+        if (value > 0) {
+            total = static_cast<size_t>(value) * 1024 * 1024;
+        }
     }
+    const std::filesystem::path source = root / "payload.bin";
     {
         std::ofstream out(source, std::ios::binary | std::ios::trunc);
-        out.write(expected.data(), static_cast<std::streamsize>(expected.size()));
+        std::vector<char> chunk(1024 * 1024);
+        size_t written = 0;
+        while (written < total) {
+            size_t n = std::min(chunk.size(), total - written);
+            for (size_t i = 0; i < n; ++i) {
+                chunk[i] = static_cast<char>(((written + i) * 31 + 7) & 0xFF);
+            }
+            out.write(chunk.data(), static_cast<std::streamsize>(n));
+            written += n;
+        }
     }
 
+    const ULONGLONG start_ms = GetTickCount64();
     master.send_files({source.string()});
 
     const std::filesystem::path received = root / "downloads" / "payload.bin";
-    for (int i = 0; i < 100 && !std::filesystem::exists(received); ++i) {
-        Sleep(100);
-    }
-    check(std::filesystem::exists(received), "file appears in download directory");
-
-    // Give the receiver a moment to flush the last chunks.
-    for (int i = 0; i < 50; ++i) {
+    const int wait_ticks = static_cast<int>(std::min<size_t>(6000, 100 + total / 1024));
+    for (int i = 0; i < wait_ticks; ++i) {
         if (std::filesystem::exists(received) &&
-            std::filesystem::file_size(received, ec) == expected.size()) {
+            std::filesystem::file_size(received, ec) == total && !ec) {
             break;
         }
+        ec.clear();
         Sleep(100);
     }
+    const double seconds = (GetTickCount64() - start_ms) / 1000.0;
+
+    check(std::filesystem::exists(received), "file appears in download directory");
 
     const auto actual_size = std::filesystem::file_size(received, ec);
-    std::printf("expected %zu bytes, received %llu bytes\n", expected.size(),
-                static_cast<unsigned long long>(ec ? 0 : actual_size));
-    check(!ec && actual_size == expected.size(), "received size matches");
-
-    std::vector<char> actual;
-    if (!ec) {
-        std::ifstream in(received, std::ios::binary);
-        actual.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    std::printf("expected %zu bytes, received %llu bytes, %.2f s\n", total,
+                static_cast<unsigned long long>(ec ? 0 : actual_size), seconds);
+    check(!ec && actual_size == total, "received size matches");
+    if (!ec && actual_size == total && seconds > 0.001) {
+        std::printf("throughput: %.1f MB/s\n", (total / (1024.0 * 1024.0)) / seconds);
     }
-    check(actual == expected, "received content matches byte for byte");
+
+    // Byte-for-byte comparison, streamed so a 1 GB file does not blow up memory.
+    bool same = true;
+    {
+        std::ifstream a(source, std::ios::binary);
+        std::ifstream b(received, std::ios::binary);
+        std::vector<char> ba(1 << 20);
+        std::vector<char> bb(1 << 20);
+        while (same && a && b) {
+            a.read(ba.data(), static_cast<std::streamsize>(ba.size()));
+            b.read(bb.data(), static_cast<std::streamsize>(bb.size()));
+            const std::streamsize na = a.gcount();
+            const std::streamsize nb = b.gcount();
+            if (na != nb || std::memcmp(ba.data(), bb.data(), static_cast<size_t>(na)) != 0) {
+                same = false;
+            }
+        }
+        if (!a.eof() || !b.eof()) {
+            same = false;
+        }
+    }
+    check(same, "received content matches byte for byte");
 
     master.stop();
     agent.stop();

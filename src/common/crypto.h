@@ -27,4 +27,25 @@ bool from_hex(const std::string& text, std::vector<uint8_t>* out);
 
 bool constant_time_equal(const uint8_t* a, const uint8_t* b, size_t len);
 
+// Incremental SHA-256, used to verify file transfers end to end. Feed every
+// chunk as it is read or written, then call finish() once.
+class Sha256Stream {
+public:
+    Sha256Stream();
+    ~Sha256Stream();
+    Sha256Stream(const Sha256Stream&) = delete;
+    Sha256Stream& operator=(const Sha256Stream&) = delete;
+
+    bool ok() const { return ok_; }
+    void update(const void* data, size_t len);
+    bool finish(uint8_t out[32]);
+
+private:
+    void release();
+
+    void* alg_ = nullptr;
+    void* hash_ = nullptr;
+    bool ok_ = false;
+};
+
 }  // namespace lk

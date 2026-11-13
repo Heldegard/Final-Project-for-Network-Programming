@@ -340,15 +340,24 @@ bool parse_file_chunk(const std::vector<uint8_t>& p, uint32_t* id, uint64_t* off
     return true;
 }
 
-std::vector<uint8_t> file_end(uint32_t id) {
+std::vector<uint8_t> file_end(uint32_t id, const uint8_t hash[32]) {
     Writer w;
     w.u32(id);
+    if (hash != nullptr) {
+        w.raw(hash, 32);
+    }
     return w.data();
 }
 
-bool parse_file_end(const std::vector<uint8_t>& p, uint32_t* id) {
+bool parse_file_end(const std::vector<uint8_t>& p, uint32_t* id, bool* has_hash, uint8_t hash[32]) {
     Reader r(p.data(), p.size());
     *id = r.u32();
+    *has_hash = false;
+    if (r.ok() && r.remaining() == 32) {
+        if (r.raw(hash, 32)) {
+            *has_hash = true;
+        }
+    }
     return r.ok();
 }
 

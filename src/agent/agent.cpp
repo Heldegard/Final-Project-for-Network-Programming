@@ -57,6 +57,7 @@ struct FileRecv {
     uint64_t size = 0;
     uint64_t written = 0;
     bool failed = false;
+    std::unique_ptr<Sha256Stream> hasher = std::make_unique<Sha256Stream>();
 };
 
 uint64_t now_ms() { return GetTickCount64(); }
@@ -432,10 +433,12 @@ struct Agent::Impl {
                 }
                 case MsgType::FileEnd: {
                     uint32_t id = 0;
-                    if (!msg::parse_file_end(frame.payload, &id)) {
+                    bool has_hash = false;
+                    uint8_t hash[32]{};
+                    if (!msg::parse_file_end(frame.payload, &id, &has_hash, hash)) {
                         break;
                     }
-                    receive_file_end(files, id, *connection);
+                    receive_file_end(files, id, has_hash, hash, *connection);
                     break;
                 }
                 case MsgType::Bye:
@@ -516,9 +519,11 @@ struct Agent::Impl {
             return;
         }
         it->second.written += data.size();
+        it->second.hasher->update(data.data(), data.size());
     }
 
-    void receive_file_end(std::map<uint32_t, FileRecv>& files, uint32_t id, Conn& connection) {
+    void receive_file_end(std::map<uint32_t, FileRecv>& files, uint32_t id, bool has_hash,
+                          const uint8_t expected[32], Conn& connection) {
         auto it = files.find(id);
         if (it == files.end()) {
             connection.send(MsgType::FileAck, msg::file_ack(id, 1, "unknown file id"));
@@ -526,7 +531,12 @@ struct Agent::Impl {
         }
         it->second.out.close();
         const bool size_ok = it->second.written == it->second.size;
-        const bool ok = size_ok && !it->second.failed;
+
+        uint8_t digest[32]{};
+        const bool have_digest = it->second.hasher->finish(digest);
+        const bool hash_ok = !has_hash || (have_digest && constant_time_equal(digest, expected, 32));
+        const bool ok = size_ok && !it->second.failed && hash_ok;
+
         std::wstring final_path = it->second.path;
         std::wstring part_path = it->second.part_path;
         uint64_t size = it->second.size;
@@ -549,7 +559,10 @@ struct Agent::Impl {
         const bool committed = ok && !ec;
         connection.send(MsgType::FileAck,
                         msg::file_ack(id, committed ? 0 : 2,
-                                      committed ? "ok" : (size_ok ? "write failed" : "size mismatch")));
+                                      committed ? "ok"
+                                                : (!size_ok ? "size mismatch"
+                                                            : (!hash_ok ? "hash mismatch"
+                                                                        : "write failed"))));
 
         if (committed) {
             char text[512]{};
@@ -557,9 +570,14 @@ struct Agent::Impl {
                           static_cast<unsigned long long>(size / 1024));
             std::string utf8;
             wide_to_utf8(final_path, &utf8);
-            LK_INFO("file saved: %s (%llu bytes)", utf8.c_str(),
-                    static_cast<unsigned long long>(size));
+            LK_INFO("file saved: %s (%llu bytes) sha256=%s", utf8.c_str(),
+                    static_cast<unsigned long long>(size),
+                    have_digest ? to_hex(digest, 32).c_str() : "n/a");
             notify_user("LanKVM 收到文件", text);
+        } else if (!hash_ok) {
+            LK_ERROR("file #%u hash mismatch: expected %s, got %s", id,
+                     to_hex(expected, 32).c_str(), have_digest ? to_hex(digest, 32).c_str() : "n/a");
+            notify_user("LanKVM 文件校验失败", "内容与发送端不一致，文件已删除，请重试");
         } else {
             LK_WARN("file #%u incomplete: %llu of %llu bytes, partial file removed", id,
                     static_cast<unsigned long long>(written),
