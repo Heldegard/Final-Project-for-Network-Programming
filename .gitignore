@@ -27,3 +27,6 @@ run-*/
 # misc
 Thumbs.db
 desktop.ini
+
+# Office lock files
+~$*
