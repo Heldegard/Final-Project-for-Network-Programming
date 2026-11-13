@@ -25,6 +25,7 @@ namespace {
 constexpr UINT kBalloonMessage = WM_APP + 21;
 constexpr UINT_PTR kTimerId = 1;
 constexpr wchar_t kMainClass[] = L"LanKVM.Main";
+constexpr char kVersion[] = "0.2.0";
 
 struct App {
     lk::Config cfg;
@@ -162,7 +163,7 @@ void handle_command(int command) {
             ShellExecuteW(nullptr, L"open", app->log_path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             break;
         case lk::Tray::kCmdAbout: {
-            std::wstring message = L"LanKVM 0.1.1\n\n";
+            std::wstring message = L"LanKVM 0.2.0（文件传输带 SHA-256 校验）\n\n";
             message += L"局域网键鼠共享 + 剪贴板同步 + 文件投递\n\n";
             message += L"角色：";
             message += (app->cfg.role == "agent") ? L"受控端" : L"主控端";
@@ -222,13 +223,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
 void print_usage() {
     std::printf(
-        "LanKVM 0.1.1\n"
+        "LanKVM %s\n"
         "usage: lankvm [master|agent] [--config <path>] [--netinfo] [--probe <ip> [port]]\n"
         "  master      capture local input and drive the peer (default)\n"
         "  agent       listen and inject input received from the master\n"
         "  --netinfo   list every network adapter and which address to use\n"
         "  --clipinfo  list clipboard formats and whether LanKVM can read them\n"
-        "  --probe     test one TCP connect and explain the result\n");
+        "  --probe     test one TCP connect and explain the result\n"
+        "  --version   print the build version and exit\n",
+        kVersion);
 }
 
 int run_selftest() {
@@ -306,6 +309,10 @@ int main(int argc, char** argv) {
         if (arg == "--netinfo") {
             netinfo = true;
             continue;
+        }
+        if (arg == "--version" || arg == "-v") {
+            std::printf("LanKVM %s\n", kVersion);
+            return 0;
         }
         if (arg == "--clipinfo") {
             std::printf("%s", lk::clipboard_formats_report().c_str());
@@ -505,7 +512,7 @@ int main(int argc, char** argv) {
         std::printf("pre-shared key: %s\n", app.cfg.psk_hex.c_str());
     }
     std::printf("\n==================================================\n");
-    std::printf(" LanKVM 0.1.1\n");
+    std::printf(" LanKVM %s\n", kVersion);
     std::printf(" role   : %s\n", app.cfg.role.c_str());
     std::printf(" config : %ls\n", app.config_path.c_str());
     std::printf(" local  : %s:%u\n", app.local_ip.c_str(), static_cast<unsigned>(app.cfg.port));
