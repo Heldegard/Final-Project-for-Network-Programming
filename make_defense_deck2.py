@@ -7,6 +7,9 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.ns import qn
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pathlib import Path
+import os
 
 FONT = "Microsoft YaHei"
 CODE = "Consolas"
@@ -167,6 +170,33 @@ def table(slide, x, y, w, rows, widths, row_h=0.46, header=True, size=12,
 
 def notes(slide, text):
     slide.notes_slide.notes_text_frame.text = text
+
+
+def add_linked_video(slide, video_path, poster_path, x, y, w, h):
+    """Insert a video as an external link instead of embedding it.
+
+    A 500 MB recording would turn the deck into a 500 MB file. Linking keeps the
+    pptx small; the mp4 has to travel with it (or sit at the same absolute path).
+    """
+    movie = slide.shapes.add_movie(video_path, Inches(x), Inches(y), Inches(w), Inches(h),
+                                   poster_frame_image=poster_path, mime_type="video/mp4")
+    pic = movie._element
+    video_el = pic.find(".//" + qn("a:videoFile"))
+    if video_el is not None:
+        old = video_el.get(qn("r:link"))
+        new = slide.part.relate_to(Path(video_path).as_uri(), RT.MEDIA, is_external=True)
+        video_el.set(qn("r:link"), new)
+        if old:
+            slide.part.drop_rel(old)
+    # the p14:media extension sits under p:nvPr and would still point at the
+    # removed media part, leaving a dangling r:embed in the file
+    for ext_lst in pic.findall(".//" + qn("p:extLst")):
+        ext_lst.getparent().remove(ext_lst)
+    # drop every embedded media relationship so the video is not packed in
+    for rid, rel in list(slide.part.rels.items()):
+        if rel.reltype == RT.MEDIA and not rel.is_external:
+            slide.part.drop_rel(rid)
+    return movie
 
 
 def build():
@@ -340,10 +370,16 @@ def build():
 
     # ------------------------------------------------------------ 8 Demo
     s = content_slide(prs, "07 / 演示", "现场演示（视频 ≤ 5 分钟）", 8)
-    shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 0.85, 1.80, 7.55, 4.55, fill=NAVY, radius=0.03)
-    tri = shape(s, MSO_SHAPE.ISOSCELES_TRIANGLE, 4.15, 3.35, 0.85, 1.20, fill=ACCENT2)
-    tri.rotation = 90
-    add_text(s, 0.85, 5.65, 7.55, 0.45, "演示视频 · 点击播放", 14, False, WHITE, PP_ALIGN.CENTER)
+    video_path = "C:/Users/yutan/Desktop/FinalProjectVideo.mp4"
+    poster_path = "docs/video-poster.png"
+    has_video = os.path.exists(video_path) and os.path.exists(poster_path)
+    if has_video:
+        add_linked_video(s, video_path, poster_path, 0.85, 1.80, 7.55, 4.25)
+    else:
+        shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 0.85, 1.80, 7.55, 4.25, fill=NAVY, radius=0.03)
+        tri = shape(s, MSO_SHAPE.ISOSCELES_TRIANGLE, 4.15, 3.25, 0.85, 1.20, fill=ACCENT2)
+        tri.rotation = 90
+        add_text(s, 0.85, 4.85, 7.55, 0.45, "演示视频 · 点击播放", 14, False, WHITE, PP_ALIGN.CENTER)
     add_text(s, 8.75, 1.85, 3.9, 0.35, "视频里会看到", 12, True, ACCENT)
     add_text(s, 8.75, 2.28, 3.9, 3.9, [
         "① 鼠标推出右边缘，对端光标出现",
