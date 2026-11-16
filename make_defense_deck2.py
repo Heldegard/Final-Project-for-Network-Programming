@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Defense deck following the course-required outline (10 slides)."""
+"""Defense deck: course outline, 2-person team, 15 min (3 min demo)."""
+
+import os
+from pathlib import Path
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -8,8 +11,6 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.ns import qn
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
-from pathlib import Path
-import os
 
 FONT = "Microsoft YaHei"
 CODE = "Consolas"
@@ -173,11 +174,6 @@ def notes(slide, text):
 
 
 def add_linked_video(slide, video_path, poster_path, x, y, w, h):
-    """Insert a video as an external link instead of embedding it.
-
-    A 500 MB recording would turn the deck into a 500 MB file. Linking keeps the
-    pptx small; the mp4 has to travel with it (or sit at the same absolute path).
-    """
     movie = slide.shapes.add_movie(video_path, Inches(x), Inches(y), Inches(w), Inches(h),
                                    poster_frame_image=poster_path, mime_type="video/mp4")
     pic = movie._element
@@ -188,11 +184,8 @@ def add_linked_video(slide, video_path, poster_path, x, y, w, h):
         video_el.set(qn("r:link"), new)
         if old:
             slide.part.drop_rel(old)
-    # the p14:media extension sits under p:nvPr and would still point at the
-    # removed media part, leaving a dangling r:embed in the file
     for ext_lst in pic.findall(".//" + qn("p:extLst")):
         ext_lst.getparent().remove(ext_lst)
-    # drop every embedded media relationship so the video is not packed in
     for rid, rel in list(slide.part.rels.items()):
         if rel.reltype == RT.MEDIA and not rel.is_external:
             slide.part.drop_rel(rid)
@@ -217,38 +210,43 @@ def build():
     info = [
         ("课程", "网络编程"),
         ("组号", "第 __ 组"),
-        ("成员", "____________   ____________   ____________"),
+        ("成员", "____________        ____________"),
         ("日期", "2026 年 11 月"),
     ]
     for i, (k, v) in enumerate(info):
         y = 4.62 + i * 0.42
         add_text(s, 1.00, y, 1.0, 0.32, k, 12, False, RGBColor(0x6E, 0x82, 0x95))
         add_text(s, 1.75, y, 9.0, 0.32, v, 12.5, False, RGBColor(0xC8, 0xD8, 0xE4))
-    notes(s, "开场：各位老师好，我们是第 __ 组，项目叫 LanKVM——局域网键鼠共享系统。\n"
+    notes(s, "【0:00-0:30】开场。\n"
+             "各位老师好，我们是第 __ 组，项目叫 LanKVM——局域网键鼠共享系统。\n"
              "一句话：一套键盘鼠标控制两台电脑，剪贴板双向同步，文件拖过去就能传。\n"
-             "下面按需求、实现、测试、演示、问题排查的顺序汇报。")
+             "我们组两个人，下面先讲分工，再按需求、实现、代码、测试、演示、踩坑的顺序汇报。")
 
     # ------------------------------------------------------------ 2 分工
-    s = content_slide(prs, "01 / 项目与分工", "三个人，三条主线", 2)
-    add_text(s, 0.82, 1.78, 11.6, 0.40,
-             "项目定位：从零实现一套可用的跨机输入接管系统，协议、采集、注入、剪贴板全部自研。",
+    s = content_slide(prs, "01 / 项目与分工", "两个人，两条主线", 2)
+    add_text(s, 0.82, 1.76, 11.6, 0.40,
+             "两个人各管一条链路：一条负责“把输入送出去”，一条负责“把输入接住并呈现”。",
              13, False, MUTED)
-    table(s, 0.82, 2.30, 11.7, [
+    table(s, 0.82, 2.24, 11.7, [
         ["成员", "负责模块", "具体产出", "提交"],
-        ["____（组长）", "协议 / 主控端采集", "帧格式、握手鉴权、Raw Input 采集、边缘状态机", "__"],
-        ["____", "受控端 / 文件传输", "SendInput 注入、按键释放、分块接收与 .part 落盘", "__"],
-        ["____", "界面 / 测试 / 文档", "托盘与设置窗口、52 项测试、报告与演示视频", "__"],
-    ], [2.0, 3.2, 5.4, 1.1], row_h=0.78, size=11.5)
-    add_text(s, 0.82, 5.55, 11.7, 1.0, [
-        "协作方式：Git 分支开发，每人一条主线；合并前互相 review；接口以 protocol.h 为准，",
-        "任何协议改动都要同时改两端并补测试——这也是我们能持续重构的原因。",
-    ], 12, False, MUTED, spacing=1.45)
-    notes(s, "分工按模块划分，不是按文件划分：协议、受控端、界面三条线各自独立。\n"
-             "Git 记录可查，每人的提交集中在自己的模块。")
+        ["____（组长）", "协议 + 主控端", "帧格式、握手鉴权、Raw Input 采集、边缘状态机、连接管理", "__"],
+        ["____", "受控端 + 界面 + 测试", "SendInput 注入、剪贴板与文件、托盘与设置窗口、52 项测试", "__"],
+    ], [2.15, 3.25, 5.10, 1.10], row_h=0.86, size=11)
+    add_text(s, 0.82, 5.02, 11.7, 1.1, [
+        ("协作方式", 11.5, MUTED, True),
+        "以 protocol.h 为接口契约：任何协议改动必须同时改两端并补测试，合并前互相 review。",
+        "两人每天各留 30 分钟联调，问题当天记进 issue，不留在脑子里。",
+    ], 10.5, False, INK, spacing=1.35)
+    shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 0.82, 6.28, 11.7, 0.62, fill=PANEL, radius=0.12)
+    add_text(s, 1.05, 6.38, 11.2, 0.45,
+             "时间分配：讲解 12 分钟 + 演示视频 3 分钟 = 15 分钟", 12, True, ACCENT)
+    notes(s, "【0:30-1:30】\n"
+             "我们组两个人，按链路分工而不是按文件分工。\n"
+             "接口以 protocol.h 为准，改协议必须两端同时改，这也是我们能反复重构还不散架的原因。")
 
-    # ------------------------------------------------------------ 3 需求分析
+    # ------------------------------------------------------------ 3 需求
     s = content_slide(prs, "02 / 需求分析", "要做什么，做到什么程度", 3)
-    table(s, 0.82, 1.78, 6.05, [
+    table(s, 0.82, 1.76, 6.05, [
         ["编号", "功能需求"],
         ["F1", "跨屏接管：鼠标推出边缘即控制对端"],
         ["F2", "键盘输入：含组合键、方向键、中文输入"],
@@ -257,52 +255,54 @@ def build():
         ["F5", "断线自愈：6 s 内发现，自动重连"],
         ["F6", "可配置：IP、端口、密钥、边缘方向"],
     ], [0.85, 5.20], row_h=0.55, size=11)
-    table(s, 7.05, 1.78, 5.45, [
+    table(s, 7.05, 1.76, 5.45, [
         ["类别", "指标"],
         ["延迟", "端到端 p50 ≤ 20 ms"],
         ["可靠", "按键零丢失、零乱序"],
         ["安全", "连接鉴权 + 剪贴板加密"],
         ["部署", "单文件、零第三方运行时"],
     ], [1.15, 4.30], row_h=0.55, size=11)
-    add_text(s, 0.82, 5.78, 11.6, 1.1, [
-        ("关键约束（决定了后面的设计）", 11.5, INK, True),
+    add_text(s, 0.82, 5.72, 11.6, 1.1, [
+        ("关键约束（决定了后面的所有设计）", 11.5, INK, True),
         "只面向可信局域网 → 键鼠事件不加密；只支持 Windows → 直接用 Win32 输入子系统；"
         "不能丢键 → 选 TCP 而不是 UDP。",
     ], 10.5, False, MUTED, spacing=1.35)
-    notes(s, "需求分两块：左边是功能，右边是硬指标。\n"
-             "注意最后三条约束，它们直接决定了技术选型，下一页会看到。")
+    notes(s, "【1:30-2:40】\n"
+             "左边六条是功能，右边四条是硬指标。\n"
+             "重点讲最后三条约束：它们直接决定了 TCP、Win32 API、不加密这三个选择。")
 
-    # ------------------------------------------------------------ 4 界面截图
+    # ------------------------------------------------------------ 4 界面
     s = content_slide(prs, "03 / 界面与功能", "前端：主控端界面　后端：运行状态", 4)
-    add_text(s, 0.75, 1.68, 3.0, 0.30, "设置窗口（真实截图）", 10.5, True, ACCENT)
-    s.shapes.add_picture("docs/ui-settings.png", Inches(0.78), Inches(1.98), width=Inches(2.95))
-    add_text(s, 0.78, 5.38, 2.95, 0.55,
-             "角色、对端 IP、密钥、边缘方向、四个开关，保存即生效。", 9.5, False, MUTED,
-             spacing=1.3)
+    add_text(s, 0.75, 1.70, 3.2, 0.30, "设置窗口（真实截图）", 10.5, True, ACCENT)
+    s.shapes.add_picture("docs/ui-settings.png", Inches(0.75), Inches(1.98), width=Inches(3.30))
+    add_text(s, 0.75, 5.55, 3.3, 0.90,
+             "角色、对端 IP、密钥、边缘方向、四个开关；保存后按新角色自动重启。",
+             9.5, False, MUTED, spacing=1.35)
 
-    add_text(s, 4.15, 1.68, 4.4, 0.30, "文件投递框（真实截图）", 10.5, True, ACCENT)
-    s.shapes.add_picture("docs/ui-dropzone.png", Inches(4.18), Inches(2.02), width=Inches(2.25))
-    add_text(s, 6.62, 2.02, 5.9, 2.1, [
-        ("四个功能点，全部可现场复现", 12.5, INK, True),
+    add_text(s, 4.45, 1.70, 3.0, 0.30, "文件投递框（真实截图）", 10.5, True, ACCENT)
+    s.shapes.add_picture("docs/ui-dropzone.png", Inches(4.45), Inches(2.02), width=Inches(2.10))
+    add_text(s, 6.85, 1.98, 5.6, 1.9, [
+        ("四个功能点，全部可现场复现", 11.5, INK, True),
         "① 跨屏接管：推到边缘，对端光标出现",
         "② 键盘透传：组合键与中文输入正常",
         "③ 剪贴板：文本与截图双向同步",
         "④ 文件投递：拖入即传，完成后自动改名",
-    ], 10.5, False, MUTED, spacing=1.5)
+    ], 10, False, MUTED, spacing=1.45)
 
-    shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 4.15, 4.30, 8.45, 2.25, fill=NAVY, radius=0.05)
-    add_text(s, 4.38, 4.42, 8.0, 2.0, [
+    shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 4.45, 4.05, 8.05, 2.45, fill=NAVY, radius=0.05)
+    add_text(s, 4.68, 4.18, 7.6, 2.2, [
         ("后端：真实运行日志", 10.5, ACCENT2, True),
-        ("[INFO] status: connected to 192.168.1.20", 9.5, CODE_FG, False),
-        ("[INFO] clipboard sent: format=2 bytes=14745652 encrypted=1", 9.5, CODE_FG, False),
-        ("[INFO] sent file 'demo.mp4' (209715200 bytes) sha256=4f2a9c...", 9.5, CODE_FG, False),
-        ("[INFO] file saved: D:\\...\\demo.mp4 (209715200 bytes) sha256=4f2a9c...", 9.5,
+        ("[INFO] status: connected to 192.168.1.20", 9, CODE_FG, False),
+        ("[INFO] clipboard sent: format=2 bytes=14745652 encrypted=1", 9, CODE_FG, False),
+        ("[INFO] sent file 'demo.mp4' (209715200 bytes) sha256=4f2a9c...", 9, CODE_FG, False),
+        ("[INFO] file saved: D:\\...\\demo.mp4 (209715200 bytes) sha256=4f2a9c...", 9,
          CODE_FG, False),
     ], font=CODE, spacing=1.5)
-    notes(s, "左边是设置窗口的真实截图，右边是投递框。\n"
-             "右下角是运行日志：连接、剪贴板、文件发送、文件落地，两端的 sha256 一致才算成功。")
+    notes(s, "【2:40-4:00】\n"
+             "左边是设置窗口，我们截图放在这里，老师可以直接看到界面元素。\n"
+             "右下角是真实日志：连接、剪贴板、文件发送、文件落地，两端 sha256 一致才算成功。")
 
-    # ------------------------------------------------------------ 5 实施操作
+    # ------------------------------------------------------------ 5 实施
     s = content_slide(prs, "04 / 实施操作", "部署只要四步", 5)
     steps = [
         ("准备", "拷贝 exe，首次运行生成配置与随机密钥", "lankvm.exe --version  →  LanKVM 0.2.0"),
@@ -321,35 +321,50 @@ def build():
     add_text(s, 0.86, 6.55, 11.6, 0.40,
              "两端首次运行都要执行一次 scripts\\setup-firewall.cmd -SetNetworkPrivate（管理员）。",
              10.5, False, MUTED)
-    notes(s, "四步：准备、配置、启动、验证。\n"
-             "验证这一步最重要：先用 --probe 确认端口通，再看日志，最后才测功能，能省很多时间。")
+    notes(s, "【4:00-5:10】\n"
+             "四步：准备、配置、启动、验证。\n"
+             "验证这一步最重要：先用 --probe 确认端口通，再看日志，最后才测功能。")
 
-    # ------------------------------------------------------------ 6 关键函数
-    s = content_slide(prs, "05 / 关键函数", "四个函数撑起整条链路", 6)
-    cards = [
-        ("帧编码", "encode_frame()", "14 字节定长帧头，逐字段写小端序，不依赖结构体内存布局。",
-         "单测：帧头长度、坏 magic 拒绝、分片重组"),
-        ("坐标归一化", "normalize()", "像素坐标 → 0~65535 绝对值，跨分辨率不漂移。",
-         "单测：0 / 中点 / 右端点 / 退化矩形"),
-        ("按键注入", "Injector::key()", "用扫描码而非虚拟键，扩展键补 E0 标志，断线补发抬起。",
-         "实测：方向键、右 Ctrl、小键盘、粘键场景"),
-        ("文件校验", "receive_file_end()", "边收边算 SHA-256，与发送端比对，不符则删除文件。",
-         "实测：200 MB 文件哈希一致，逐字节相同"),
-    ]
-    for i, (tag, sig, desc, proof) in enumerate(cards):
-        x = 0.82 + (i % 2) * 6.05
-        y = 1.80 + (i // 2) * 2.55
-        shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, 5.75, 2.25, fill=PANEL, radius=0.05)
-        add_text(s, x + 0.28, y + 0.18, 4.0, 0.30, tag, 10.5, True, MUTED)
-        add_text(s, x + 0.28, y + 0.48, 5.2, 0.35, sig, 14, True, ACCENT, font=CODE)
-        add_text(s, x + 0.28, y + 0.94, 5.2, 0.75, desc, 10.5, False, INK, spacing=1.35)
-        add_text(s, x + 0.28, y + 1.70, 5.2, 0.35, proof, 9.5, False, MUTED, spacing=1.2)
-    notes(s, "四个函数分别对应链路的四段：编码、坐标、注入、校验。\n"
-             "每个都写了单元测试，尤其是 normalize 的边界值和 encode_frame 的字节序。")
+    # ------------------------------------------------------------ 6 代码一
+    s = content_slide(prs, "05 / 关键函数（一）", "编码与坐标：两个纯函数", 6)
+    s.shapes.add_picture("docs/code-1.png", Inches(0.70), Inches(1.82), width=Inches(5.75))
+    add_text(s, 0.70, 4.62, 5.75, 0.40, "逐字段写小端序，不依赖结构体内存布局。",
+             10.5, False, MUTED)
+    s.shapes.add_picture("docs/code-2.png", Inches(6.85), Inches(1.82), width=Inches(5.75))
+    add_text(s, 6.85, 5.00, 5.75, 0.40, "四舍五入再钳位，避免边界少 1 像素。",
+             10.5, False, MUTED)
+    add_text(s, 0.70, 5.55, 11.9, 1.1, [
+        "两个函数都做成了纯函数：不碰全局状态、不依赖 Windows API，所以能在单元测试里直接断言。",
+        "encode_frame 的输出是字节流，normalize 的输出是整数——测试只需要比较值，不需要起进程。",
+    ], 10.5, False, INK, spacing=1.4)
+    notes(s, "【5:10-6:30】\n"
+             "先看两个纯函数。encode_frame 是协议的地基，14 字节帧头逐字段写，"
+             "不用结构体强转，避免编译器对齐差异。\n"
+             "normalize 负责跨分辨率：先乘 65535 再四舍五入，最后钳位，边界不会差 1 像素。\n"
+             "这两个函数有 12 条单元测试，覆盖边界值和坏帧。")
 
-    # ------------------------------------------------------------ 7 测试
-    s = content_slide(prs, "06 / 测试", "白盒、黑盒、集成，三层都跑过", 7)
-    table(s, 0.82, 1.78, 11.7, [
+    # ------------------------------------------------------------ 7 代码二
+    s = content_slide(prs, "05 / 关键函数（二）", "注入与校验：两个有副作用的地方", 7)
+    s.shapes.add_picture("docs/code-3.png", Inches(0.70), Inches(1.82), width=Inches(4.35))
+    add_text(s, 0.70, 5.75, 4.35, 0.80, "扫描码 + E0 标志，方向键和右 Ctrl 才不会错。",
+             10, False, MUTED, spacing=1.3)
+    s.shapes.add_picture("docs/code-4.png", Inches(5.45), Inches(1.82), width=Inches(7.15))
+    add_text(s, 5.45, 4.72, 7.15, 0.40, "边收边算哈希，不一致就删文件。",
+             10.5, False, MUTED)
+    add_text(s, 5.45, 5.20, 7.15, 1.4, [
+        ("为什么这两段要单独讲", 11.5, INK, True),
+        "它们和系统交互：一个调 SendInput，一个写磁盘。副作用无法用纯函数测试，",
+        "所以我们用真实进程做端到端验证：200 MB 文件、32 位哈希比对、断线场景各跑一遍。",
+    ], 10, False, MUTED, spacing=1.4)
+    notes(s, "【6:30-8:00】\n"
+             "右边这两个函数有副作用，不能只靠单元测试。\n"
+             "Injector::key 用扫描码而不是虚拟键，因为虚拟键受键盘布局影响；扩展键要补 E0。\n"
+             "receive_file_end 边收边算 SHA-256，和发送端比对，不一致直接删文件，"
+             "避免出现“大小对但内容错”的假成功。")
+
+    # ------------------------------------------------------------ 8 测试
+    s = content_slide(prs, "06 / 测试", "白盒、黑盒、集成，三层都跑过", 8)
+    table(s, 0.82, 1.76, 11.7, [
         ["层次", "方法", "覆盖内容", "结果"],
         ["单元（白盒）", "直接调函数，断言字节与数值", "帧编解码、坐标映射、HMAC/AES 标准向量、配置读写", "30 项通过"],
         ["集成（黑盒）", "真实套接字，不关心内部实现", "握手鉴权、输入批转发、剪贴板加密传输", "17 项通过"],
@@ -365,53 +380,55 @@ def build():
         ("17 条双机验收：跨屏、按键、粘键、断线、剪贴板、投递", 10.5, INK, False),
         ("含故意制造的网络中断与密钥错误", 10.5, INK, False),
     ], spacing=1.4)
-    notes(s, "白盒测函数，黑盒测协议，端到端测整条链路。\n"
-             "52 项断言全绿；手工 17 条覆盖异常场景，包括拔网线和错误密钥。")
+    notes(s, "【8:00-9:40】\n"
+             "白盒测函数，黑盒测协议，端到端测整条链路。\n"
+             "52 项断言全绿；手工 17 条覆盖异常场景，包括拔网线和错误密钥。\n"
+             "黑盒部分特意不看实现，只用真实客户端连，模拟老师验收的视角。")
 
-    # ------------------------------------------------------------ 8 Demo
-    s = content_slide(prs, "07 / 演示", "现场演示（视频 ≤ 5 分钟）", 8)
+    # ------------------------------------------------------------ 9 Demo
+    s = content_slide(prs, "07 / 演示", "现场演示（3 分钟）", 9)
     video_path = "C:/Users/yutan/Desktop/FinalProjectVideo.mp4"
     poster_path = "docs/video-poster.png"
     has_video = os.path.exists(video_path) and os.path.exists(poster_path)
     if has_video:
-        add_linked_video(s, video_path, poster_path, 0.85, 1.80, 7.55, 4.25)
+        add_linked_video(s, video_path, poster_path, 0.85, 1.80, 7.35, 4.25)
     else:
-        shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 0.85, 1.80, 7.55, 4.25, fill=NAVY, radius=0.03)
-        tri = shape(s, MSO_SHAPE.ISOSCELES_TRIANGLE, 4.15, 3.25, 0.85, 1.20, fill=ACCENT2)
-        tri.rotation = 90
-        add_text(s, 0.85, 4.85, 7.55, 0.45, "演示视频 · 点击播放", 14, False, WHITE, PP_ALIGN.CENTER)
-    add_text(s, 8.75, 1.85, 3.9, 0.35, "视频里会看到", 12, True, ACCENT)
-    add_text(s, 8.75, 2.28, 3.9, 3.9, [
+        shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 0.85, 1.80, 7.35, 4.25, fill=NAVY, radius=0.03)
+    add_text(s, 8.55, 1.85, 4.1, 0.35, "视频里会看到", 12, True, ACCENT)
+    add_text(s, 8.55, 2.26, 4.1, 3.9, [
         "① 鼠标推出右边缘，对端光标出现",
         "② 在对端打字、用快捷键",
         "③ 复制文本、截图，对端粘贴",
         "④ 拖视频进投递框，.part 变正式名",
         "⑤ 结束对端进程，6 s 内提示并自动重连",
-    ], 11, False, INK, spacing=1.75)
-    add_text(s, 0.85, 6.55, 11.6, 0.40,
-             "视频为实机录制（两台 Windows，2560×1440 与 2560×1600 不同分辨率）。", 10, False, MUTED)
-    notes(s, "接下来放一段 5 分钟以内的实机录像，边放边解说这五个点。\n"
-             "重点让老师看到跨屏和文件投递，这两件事最直观。")
+    ], 10.5, False, INK, spacing=1.75)
+    add_text(s, 0.85, 6.35, 11.6, 0.55,
+             "3 分钟实机录像（两台 Windows，2560×1440 与 2560×1600 不同分辨率）",
+             10, False, MUTED)
+    notes(s, "【9:40-12:40】播放演示视频（约 3 分钟），边放边解说五个点。\n"
+             "重点让老师看跨屏和文件投递，这两件事最直观。\n"
+             "视频结束接一句：刚才看到的每一步，前面都对应一个技术点。")
 
-    # ------------------------------------------------------------ 9 问题
-    s = content_slide(prs, "08 / 问题与解决", "四个坑，四次定位", 9)
-    table(s, 0.80, 1.76, 11.75, [
+    # ------------------------------------------------------------ 10 问题
+    s = content_slide(prs, "08 / 问题与解决", "四个坑，四次定位", 10)
+    table(s, 0.80, 1.74, 11.75, [
         ["现象", "根因", "修复与验证"],
         ["设置窗口打开是空白的", "控件在 WM_CREATE 里创建，此时 this 还没存进窗口", "改为创建窗口后显式建控件，截图可验"],
         ["截图剪贴板传不过去", "截图工具只发布 CF_DIBV5，代码只认 CF_DIB", "补 DIBV5→DIB 转换 + PNG 兜底"],
         ["文件只有名字没有内容", "先建正式文件再传数据，中断留下空壳", "改 .part，成功才改名，失败删除"],
         ["启动后毫无反应", "auto_connect=0 时静默等待，无任何提示", "默认连接 + 状态栏与气泡告警"],
     ], [3.15, 4.55, 4.05], row_h=0.72, size=10)
-    add_text(s, 0.80, 5.85, 11.7, 0.90,
-             "共同点：都是「静默失败」——程序不报错，但结果不对。",
-             13, True, ACCENT)
-    add_text(s, 0.80, 6.28, 11.7, 0.55,
+    add_text(s, 0.80, 5.80, 11.7, 0.90,
+             "共同点：都是「静默失败」——程序不报错，但结果不对。", 13, True, ACCENT)
+    add_text(s, 0.80, 6.24, 11.7, 0.55,
              "所以后来凡是可能失败的地方，都补了可见反馈：日志、状态栏、气泡、退出码。",
              11.5, False, MUTED)
-    notes(s, "四个问题是按时间顺序讲的，都是真实发生过的。\n"
-             "最后一个设置窗口空白是最近才发现的：控件创建时机不对，窗口是空壳。")
+    notes(s, "【12:40-14:10】\n"
+             "四个问题是按时间顺序讲的，都是真实发生过的。\n"
+             "最后一个设置窗口空白是最近才发现的：控件创建时机不对，窗口是空壳。\n"
+             "共同点是静默失败，所以我们补的不只是逻辑，还有可见性。")
 
-    # ------------------------------------------------------------ 10 结尾
+    # ------------------------------------------------------------ 11 结尾
     s = prs.slides.add_slide(prs.slide_layouts[6])
     shape(s, MSO_SHAPE.RECTANGLE, 0, 0, SW, SH, fill=NAVY)
     add_text(s, 1.10, 2.35, 11.2, 1.5, [
@@ -422,7 +439,7 @@ def build():
     add_text(s, 1.10, 6.55, 11.2, 0.35,
              "LanKVM  ·  github.com/Heldegard/Final-Project-for-Network-Programming",
              10.5, False, RGBColor(0x6E, 0x82, 0x95), PP_ALIGN.CENTER)
-    notes(s, "收尾一句话，然后进入提问。")
+    notes(s, "【14:10-15:00】收尾与提问。")
 
     prs.save("LanKVM-期末答辩.pptx")
     print("saved with %d slides" % len(prs.slides))
