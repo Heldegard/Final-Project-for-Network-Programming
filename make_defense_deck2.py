@@ -387,13 +387,13 @@ def build():
 
     # ------------------------------------------------------------ 9 Demo
     s = content_slide(prs, "07 / 演示", "现场演示（3 分钟）", 9)
-    video_path = "C:/Users/yutan/Desktop/FinalProjectVideo.mp4"
+    video_path = "docs/demo-720p.mp4"
     poster_path = "docs/video-poster.png"
-    has_video = os.path.exists(video_path) and os.path.exists(poster_path)
-    if has_video:
-        add_linked_video(s, video_path, poster_path, 0.85, 1.80, 7.35, 4.25)
+    if os.path.exists(video_path):
+        s.shapes.add_movie(video_path, Inches(0.85), Inches(2.02), Inches(7.35), Inches(3.15),
+                           poster_frame_image=poster_path, mime_type="video/mp4")
     else:
-        shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 0.85, 1.80, 7.35, 4.25, fill=NAVY, radius=0.03)
+        shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, 0.85, 2.02, 7.35, 3.15, fill=NAVY, radius=0.03)
     add_text(s, 8.55, 1.85, 4.1, 0.35, "视频里会看到", 12, True, ACCENT)
     add_text(s, 8.55, 2.26, 4.1, 3.9, [
         "① 鼠标推出右边缘，对端光标出现",
@@ -402,9 +402,10 @@ def build():
         "④ 拖视频进投递框，.part 变正式名",
         "⑤ 结束对端进程，6 s 内提示并自动重连",
     ], 10.5, False, INK, spacing=1.75)
-    add_text(s, 0.85, 6.35, 11.6, 0.55,
-             "3 分钟实机录像（两台 Windows，2560×1440 与 2560×1600 不同分辨率）",
-             10, False, MUTED)
+    add_text(s, 0.85, 5.45, 11.6, 0.90, [
+        "3 分钟实机录像（两台 Windows，2560×1440 与 2560×1600 不同分辨率）",
+        "视频已嵌入本页，点击画面即可播放；同一份视频也以 mp4 附在报告文件夹。",
+    ], 10, False, MUTED, spacing=1.4)
     notes(s, "【9:40-12:40】播放演示视频（约 3 分钟），边放边解说五个点。\n"
              "重点让老师看跨屏和文件投递，这两件事最直观。\n"
              "视频结束接一句：刚才看到的每一步，前面都对应一个技术点。")
