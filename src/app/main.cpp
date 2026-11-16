@@ -295,6 +295,7 @@ int main(int argc, char** argv) {
     bool netinfo = false;
     std::string probe_host;
     uint16_t probe_port = 24800;
+    bool settings_demo = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -317,6 +318,10 @@ int main(int argc, char** argv) {
         if (arg == "--clipinfo") {
             std::printf("%s", lk::clipboard_formats_report().c_str());
             return 0;
+        }
+        if (arg == "--settings") {
+            settings_demo = true;
+            continue;
         }
         if (arg == "--probe" && i + 1 < argc) {
             probe_host = argv[++i];
@@ -345,6 +350,24 @@ int main(int argc, char** argv) {
 
     if (selftest) {
         return run_selftest();
+    }
+
+    if (settings_demo) {
+        // Opens the settings window on its own, which is handy for taking
+        // documentation screenshots and for checking the layout.
+        lk::Config cfg;
+        lk::config_load(config_path.empty() ? lk::config_default_path() : config_path, &cfg,
+                        nullptr);
+        lk::config_ensure_psk(&cfg);
+        HWND host = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0,
+                                    GetSystemMetrics(SM_CXSCREEN),
+                                    GetSystemMetrics(SM_CYSCREEN), nullptr, nullptr, nullptr,
+                                    nullptr);
+        lk::SettingsDialog::show(host, &cfg);
+        if (host) {
+            DestroyWindow(host);
+        }
+        return 0;
     }
 
     if (netinfo) {

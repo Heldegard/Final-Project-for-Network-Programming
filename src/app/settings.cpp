@@ -211,12 +211,6 @@ bool Dialog::save_values() {
 LRESULT CALLBACK Dialog::wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     auto* self = reinterpret_cast<Dialog*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (msg) {
-        case WM_CREATE:
-            if (self) {
-                self->hwnd_ = hwnd;
-                self->create_controls();
-            }
-            return 0;
         case WM_COMMAND: {
             int id = LOWORD(wparam);
             if ((id == kIdRoleMaster || id == kIdRoleAgent) && self) {
@@ -274,12 +268,18 @@ bool Dialog::show(HWND parent, Config* cfg) {
     int y = parent_rect.top + ((parent_rect.bottom - parent_rect.top) - kHeight) / 2;
 
     HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LanKVM.Settings", L"LanKVM 设置",
-                                WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE, x, y, kWidth,
-                                kHeight, parent, nullptr, instance, this);
+                                WS_CAPTION | WS_SYSMENU | WS_POPUP, x, y, kWidth, kHeight, parent,
+                                nullptr, instance, this);
     if (!hwnd) {
         return false;
     }
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    // Controls must be created after GWLP_USERDATA is set: WM_CREATE fires
+    // inside CreateWindowExW, before this object can be recovered from the
+    // window, so building them there silently produced an empty dialog.
+    this->hwnd_ = hwnd;
+    create_controls();
+    ShowWindow(hwnd, SW_SHOW);
 
     if (parent) {
         EnableWindow(parent, FALSE);
